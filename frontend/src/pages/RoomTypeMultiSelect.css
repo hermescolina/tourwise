@@ -1,0 +1,45 @@
+/* --- Robust custom checkbox (ignore native appearance entirely) --- */
+.rtms-item input[type="checkbox"] {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  display: inline-block;
+  vertical-align: middle;
+  border: 2px solid #475569;       /* slate-600 */
+  border-radius: 4px;
+  background: #fff;
+  position: relative;
+  cursor: pointer;
+  outline: none;
+}
+
+/* checked box fill */
+.rtms-item input[type="checkbox"]:checked {
+  background-color: #2563eb;       /* blue-600 */
+  border-color: #2563eb;
+}
+
+/* draw the ✓ */
+.rtms-item input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 5px;
+  height: 10px;
+  border-right: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(45deg);
+}
+
+/* hover/focus polish */
+.rtms-item input[type="checkbox"]:hover {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.rtms-item input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}

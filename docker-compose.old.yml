@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+
+  db:
+    image: mysql:8.0
+    container_name: mysql_db
+    # Only expose if you need to access from host, otherwise internal network access is sufficient
+    # ports:
+    #   - "3306:3306"
+    env_file:
+      - ./backend/tour_api/.env.tours # Assuming this .env has DB credentials for all
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    restart: always # Added restart policy
+    healthcheck: # Added health check for DB
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      start_period: 10s
+
+  tour_api:
+    build:
+      context: ./backend/tour_api
+    container_name: flask_tour_api
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend/tour_api:/app
+      - ./backend/uploads:/app/uploads
+    working_dir: /app
+    env_file:
+      - ./backend/tour_api/.env.tours
+    # Removed extra_hosts as service discovery within Docker Compose network is preferred
+    environment:
+      FLASK_APP: main.py
+      FLASK_ENV: development
+      APP_ENV: development
+      # Make sure your .env.tours has DB_HOST=db and other API URLs
+    command: flask run --host=0.0.0.0 --port=3001
+    depends_on: # Ensures DB starts before API (not a guarantee of readiness, use healthcheck)
+      db:
+        condition: service_healthy # Use healthcheck condition if healthcheck is defined
+    restart: always
+    # Example healthcheck for Flask (requires a /health endpoint in your Flask app)
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  hotel_api:
+    build:
+      context: ./backend/hotel_api
+    container_name: flask_hotel_api
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/hotel_api:/app
+    working_dir: /app
+    env_file:
+      - ./backend/hotel_api/.env.hotels
+    environment:
+      FLASK_APP: hotel_app.py
+      FLASK_ENV: development
+      APP_ENV: development
+      # Make sure your .env.hotels has DB_HOST=db
+    command: flask run --host=0.0.0.0 --port=5000
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  car_api:
+    build:
+      context: ./backend/car_api
+    container_name: flask_car_api
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./backend/car_api:/app
+    working_dir: /app
+    env_file:
+      - ./backend/car_api/.env.cars
+    environment:
+      FLASK_APP: car_app.py
+      FLASK_ENV: development
+      APP_ENV: development
+      # Make sure your .env.cars has DB_HOST=db
+    command: flask run --host=0.0.0.0 --port=5001
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: vite_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # Important to prevent host's node_modules from overwriting container's
+    working_dir: /app
+    command: ["npm", "run", "dev"]
+    # If frontend needs to wait for APIs to be ready, you could add depends_on
+    # depends_on:
+    #   tour_api:
+    #     condition: service_started
+    #   hotel_api:
+    #     condition: service_started
+    #   car_api:
+    #     condition: service_started
+    restart: always
+
+volumes:
+  db_data:
