@@ -112,6 +112,15 @@ function primeStateFromCache(cacheKey, setter) {
     return cached; // return to reuse its etag
 }
 
+async function probeBackend(clientVer) {
+  const PROBE_URL = `${apiBaseTour}/api/ta/touradmin-probe`;
+  const res = await fetch(`${PROBE_URL}?ver=${encodeURIComponent(clientVer || "")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error("probe failed: " + res.status);
+  const text = (await res.text()).trim();
+  return text; // raw value from backend
+}
+
+
 export default function TourAdmin() {
     const [isEditing, setIsEditing] = useState(false);
     const [editingSlug, setEditingSlug] = useState(null);
@@ -121,6 +130,8 @@ export default function TourAdmin() {
 
     const base = `${frontendBase}/tourism-analytics/`;
     const imageBase = `${apiBaseTour}`;
+
+    const PROBE_INTERVAL_MS = 60_000; // 1 minute
 
     const [form, setForm] = useState({
         title: '', slug: '', location: '', price: '',
@@ -136,110 +147,192 @@ export default function TourAdmin() {
     let currentReqId = 0;
     let currentController = null;
 
-    const fetchWithStrategy = async () => {
-        const TOUR_CACHE_KEY = 'BrowseTours:/api/ta/touradmin-data';
-        const reqId = ++currentReqId;
-        const startedAt = Date.now();
-
-        // Cancel any previous pending fetch
-        if (currentController) {
-            try { currentController.abort(); } catch (_) {}
-        }
-        currentController = new AbortController();
-        const signal = currentController.signal;
-
-        // 1) Prime UI from cache (fast paint)
-        const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
-            setTours(cachedData);
-            if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
-        });
-
-        const strategy = searchParams.get('strategy');
-        const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
-        const ttl = parseTTLms(finalSTR);
-       
-        if (
-            ttl > 0 &&
-            cachedEntry &&
-            typeof cachedEntry.expires === 'number' &&
-            Date.now() < cachedEntry.expires
-        ) {
-            const now = Date.now();
-            const expiresAt = cachedEntry.expires;
-            const remainingMs = Math.max(0, expiresAt - now);
-            const writtenAt = expiresAt - ttl;
-            const ageMs = Math.max(0, now - writtenAt);
-            console.log(".... Skipping fetch — TTL still valid:", {
+    function skipFetchUseCache(cachedEntry, ttl, setTours) {
+        const now = Date.now();
+        const expiresAt = cachedEntry.expires;
+        const remainingMs = Math.max(0, expiresAt - now);
+        const writtenAt = expiresAt - ttl;
+        const ageMs = Math.max(0, now - writtenAt);
+        console.log(".... Skipping fetch — TTL still valid:", {
             ttl,
             ageMs,
             remainingMs,
             writtenAt: new Date(writtenAt).toLocaleString(),
             expiresAt: new Date(expiresAt).toLocaleString()
-            });
-            setTours(cachedEntry.data || []);
-            return; // important: skip network when TTL valid
+        });
+        setTours(cachedEntry.data || []);
+        return; // important: skip network when TTL valid
+    }
+
+    
+    // module-level (once)
+    const inFlightProbes = new Map();  // key -> Promise
+    const _lastProbeAt = new Map();    // key -> nextAllowedTimestamp
+
+    const fetchWithStrategy = async () => {
+    const TOUR_CACHE_KEY = 'BrowseTours:/api/ta/touradmin-data';
+    const key = TOUR_CACHE_KEY;                   // use `key` consistently
+    const reqId = ++currentReqId;
+
+    // Cancel previous pending fetch for fetch API (if any)
+    if (currentController) {
+        try { currentController.abort(); } catch (_) {}
+    }
+    currentController = new AbortController();
+    const signal = currentController.signal;
+
+    // 1) Prime UI from cache (fast paint)
+    const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
+        console.log("... cachedData", cachedData);
+        setTours(cachedData);
+        if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
+    });
+
+    const strategy = searchParams.get('strategy');
+    const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
+    const ttl = parseTTLms(finalSTR);
+
+    // Only consider cache-based short-circuit when TTL valid
+    if (
+        ttl > 0 &&
+        cachedEntry &&
+        typeof cachedEntry.expires === 'number' &&
+        Date.now() < cachedEntry.expires
+    ) {
+        // ensure clientVer is defined
+        const clientVer = cachedEntry?.etag ?? "";
+        const now = Date.now();
+        const nextAllowed = _lastProbeAt.get(key) || 0;
+
+        // If still inside cooldown, use cache and stop
+        if (now < nextAllowed) {
+            console.log("⏳ Skipping fetch — still within probe interval", { now, nextAllowed });
+            skipFetchUseCache(cachedEntry, ttl, setTours);
+            return; // stop here
         }
 
-        // Build headers (ETag + strategy for backend)
-        const headers = {};
-        if (cachedEntry?.etag) {
-            headers['If-None-Match'] = cachedEntry.etag;
-            console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
-        }
-
-        try {
-            const res = await fetch(`${apiBaseTour}/api/ta/touradmin-data`, { headers, signal });
-            // If another request started after this one, ignore this response
-            if (reqId !== currentReqId) {
-            console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
-            return;
-            }
-
-            console.log(".... res status", res.status);
-
-            // 304 → reuse cached entry and update expires perhaps
-            if (res.status === 304 && cachedEntry?.data) {
-                console.log(".... ♻️ Using cached data, ETag matched:", cachedEntry.etag);
-                // Optionally bump TTL/expires for cachedEntry by writing again with same data & etag
-                cacheSet(TOUR_CACHE_KEY, { data: cachedEntry.data, etag: cachedEntry.etag, ttl, fetchedAt: Date.now() });
-                setTours(cachedEntry.data || []);
-                return;
-            }
-
-            if (!res.ok) {
-                console.error('fetchWithStrategy: non-ok response', res.status);
-                // decide how you want to handle errors: keep UI as-is or show error
-                return;
-            }
-
-            let data;
+        // If a probe is already in flight for this key, wait on it, then reuse cache
+        if (inFlightProbes.has(key)) {
+            console.log("➡️ Probe already running for key, awaiting existing probe");
             try {
-                data = await res.json();
-            } catch (error) {
-                console.error('❌ Failed to parse data:', error);
+                await inFlightProbes.get(key);
+            } catch (e) {
+                console.warn("inFlight probe failed", e);
+            }
+            // after awaiting the probe, cachedEntry should still be valid — reuse it
+            skipFetchUseCache(cachedEntry, ttl, setTours);
             return;
-            }
-
-            const etag = res.headers.get('ETag') || null;
-
-            // write cache with fetchedAt to avoid races
-            cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
-
-            // only set state if still the latest request
-            if (reqId === currentReqId) {
-                setTours(data || []);
-                console.log("...done");
-            } else {
-                console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setTours');
-            }
-        } catch (err) {
-            if (err.name === 'AbortError') {
-                console.log('fetchWithStrategy: aborted previous fetch');
-            } else {
-                console.error('fetchWithStrategy: fetch failed', err);
-            }
         }
-        };
+
+        // Reserve next allowed probe time immediately to avoid races
+        _lastProbeAt.set(key, Date.now() + PROBE_INTERVAL_MS);
+
+        // Start the probe (store the Promise so other callers can await)
+        const probePromise = (async () => {
+        try {
+            const updateNeeded = await probeBackend(clientVer);
+
+            if (updateNeeded === "0") {
+                console.log("... probe says no update — use cache");
+                skipFetchUseCache(cachedEntry, ttl, setTours);
+                return { stoppedEarly: true };
+            }
+
+            // probe indicates update needed; caller will continue to actual fetch afterwards
+            console.log("... probe says updateNeeded, proceed to network fetch");
+            // return { stoppedEarly: false };
+        } catch (err) {
+            console.error("probeBackend error:", err);
+            // Allow retry later by removing nextAllowed marker
+            _lastProbeAt.delete(key);
+            throw err;
+        } finally {
+            inFlightProbes.delete(key);
+        }
+        })();
+        
+        // save the promise so concurrent calls won't start a second probe
+        inFlightProbes.set(key, probePromise);
+
+        // wait for the probe to finish, and inspect result
+        let probeResult;
+        try {
+            probeResult = await probePromise;
+        } catch (err) {
+        // probe failed — decide your fallback: here we bail out and reuse cache
+            console.warn("probe failed, falling back to cache:", err);
+            skipFetchUseCache(cachedEntry, ttl, setTours);
+            return;
+        }
+
+        // If the probe told us to stop early, we already used cache above
+        if (probeResult?.stoppedEarly) {
+            return;
+        }
+
+        // else: probe indicates updateNeeded !== "0", so fallthrough to actual fetch
+    }
+
+    // ---- actual network fetch (runs only if TTL invalid or probe decided updateNeeded) ----
+    const headers = {};
+    if (cachedEntry?.etag) {
+        headers['If-None-Match'] = cachedEntry.etag;
+        console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
+    }
+    console.log(".... check pass 1")
+    try {
+        const res = await fetch(`${apiBaseTour}/api/ta/touradmin-data`, { headers, signal });
+        console.log(".... check pass 2")
+        // stale-response guard
+        if (reqId !== currentReqId) {
+            console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
+            console.log(".... check pass 3")
+            return;
+        }
+        console.log(".... check pass 4")
+
+        console.log(".... res status", res.status);
+
+        // 304 → reuse cached entry and update expires perhaps
+        if (res.status === 304 && cachedEntry?.data) {
+            console.log(".... ♻️ Using cached data, ETag matched:", cachedEntry.etag);
+            cacheSet(TOUR_CACHE_KEY, { data: cachedEntry.data, etag: cachedEntry.etag, ttl, fetchedAt: Date.now() });
+            setTours(cachedEntry.data || []);
+            return;
+        }
+
+        if (!res.ok) {
+            console.error('fetchWithStrategy: non-ok response', res.status);
+            return;
+        }
+
+        let data;
+        try {
+            data = await res.json();
+        } catch (error) {
+            console.error('❌ Failed to parse data:', error);
+            return;
+        }
+
+        const etag = res.headers.get('ETag') || null;
+        
+        cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
+
+        if (reqId === currentReqId) {
+            setTours(data || []);
+            console.log("...done");
+        } else {
+            console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setTours');
+        }
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            console.log('fetchWithStrategy: aborted previous fetch');
+        } else {
+            console.error('fetchWithStrategy: fetch failed', err);
+        }
+    }
+    };
+
 
     useEffect(() => {
         (async () => {
@@ -304,7 +397,7 @@ export default function TourAdmin() {
             const d = new Date(dateString);
             return d.toISOString().split("T")[0]; // "2025-08-26"
             }
-
+            console.log("...tour",tour)
             setForm({
                 title: tour.title || '',
                 slug: tour.slug || '',

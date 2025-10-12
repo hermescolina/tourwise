@@ -103,10 +103,6 @@ def get_categories():
     else:
         current_app.logger.info("No CACHE_FILE configured, skipping file cache")
 
-    # with mysql.connector.connect(**tours_db_config) as conn:
-    #     ver = _get_categories_version(conn) or _get_categories_token(conn)
-    #     current_app.logger.info(f"DB version resolved: {ver}")
-
     with mysql.connector.connect(**tours_db_config) as conn:
         ver_db = _get_categories_version(conn)  # may contain '\n'
         token  = _get_categories_token(conn)    # fallback
@@ -126,11 +122,6 @@ def get_categories():
 
         current_app.logger.info("Cache miss or forced refresh → fetching fresh JSON from DB")
         fresh_json = _fetch_categories_json()
-
-    # if CACHE_FILE:
-    #     current_app.logger.info("Writing fresh JSON + version to cache files")
-    #     _write_atomic(CACHE_FILE, fresh_json)
-    #     _write_atomic(CACHE_FILE + ".ver", ver)
 
     if CACHE_FILE:
         current_app.logger.info(f"Writing fresh JSON + version to cache files -> {CACHE_FILE}")

@@ -130,8 +130,9 @@ export default function BrowseTours() {
   
   let currentReqId = 0;
   let currentController = null;
-  
+
   useEffect(() => {
+
     const TOUR_CACHE_KEY = `tour-data`;
     const reqId = ++currentReqId;
     const startedAt = Date.now();  
@@ -143,8 +144,9 @@ export default function BrowseTours() {
     currentController = new AbortController();
     const signal = currentController.signal;    
 
-    // console.log(".. cachedData", cachedData)
+    
     const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
+      console.log(".. cachedData", cachedData)
       setTours(cachedData);
       if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
     });
@@ -156,7 +158,7 @@ export default function BrowseTours() {
     // 2) TTL check — skip fetch if cache still valid
 
     console.log("...Date.now() < cachedEntry?.expires", Date.now() < cachedEntry?.expires)
-    console.log("... cachedEntry.data",cachedEntry.data[0].tourcard.item_type);
+    // console.log("... cachedEntry.data",cachedEntry.data[0]?.tourcard.item_type);
 
 
     if (
@@ -182,10 +184,10 @@ export default function BrowseTours() {
         // prime UI already done, so optionally skip fetch entirely
         return; 
     }
-
+    console.log(".... check")
     // 3) Prepare headers for ETag
     const headers = {};
-    // console.log("...cachedEntry?.etag 111",cachedEntry?.etag)
+    console.log("...cachedEntry?.etag 111",cachedEntry?.etag)
     if (cachedEntry?.etag) {
         headers['If-None-Match'] = cachedEntry.etag;
         console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
@@ -211,13 +213,11 @@ export default function BrowseTours() {
         }
 
         if (!res.ok) throw new Error("Tour not found");
-
         const text = await res.text();
         try {
           const data = JSON.parse(text);
-
           if (!data) return; // nothing to do
-
+          
           const etag = res.headers.get("ETag") || null;
 
           if (fetchSignal.aborted) return;
