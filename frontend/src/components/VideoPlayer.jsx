@@ -9,9 +9,6 @@ export default function VideoPlayer({ videoId, index = 0, autoplay = false, mute
 
     const src = `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0&autoplay=${autoplayParam}&mute=${muteParam}${loopParam}`;
 
-
-
-
     // Load YT script once (safe for multiple VideoPlayer instances)
     useEffect(() => {
         if (!window.YT) {
@@ -21,17 +18,16 @@ export default function VideoPlayer({ videoId, index = 0, autoplay = false, mute
         }
     }, []);
 
-
     // Setup player and observer
     useEffect(() => {
         const interval = setInterval(() => {
             if (window.YT && window.YT.Player && iframeRef.current) {
                 clearInterval(interval);
-
+                
                 const _ = new window.YT.Player(iframeRef.current, {
                     events: {
                         onReady: (e) => {
-                            console.log(`✅ MUTE STATUS ${muted}`);
+                            console.log(`444✅ MUTE STATUS ${muted}`);
                             playerRef.current = e.target;
                             if (muted) e.target.mute();
                             if (autoplay) e.target.playVideo();
@@ -67,7 +63,6 @@ export default function VideoPlayer({ videoId, index = 0, autoplay = false, mute
         return () => clearInterval(interval);
     }, [autoplay, muted, isHeader]);
 
-
     return (
         <div style={{ marginBottom: '2rem' }}>
             {/* <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}> */}
@@ -78,8 +73,6 @@ export default function VideoPlayer({ videoId, index = 0, autoplay = false, mute
                 height: 0,
                 minHeight: '300px', // ✅ forces layout space
             }}>
-
-
                 <iframe
                     ref={iframeRef}
                     id={`youtube-player-${index}`}

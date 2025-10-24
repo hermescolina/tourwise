@@ -1,4 +1,3 @@
-import React from 'react';
 import styles from './WhatsIncluded.module.css'; // Optional CSS module
 
 export default function WhatsIncluded({ inclusions = [], exclusions = [] }) {

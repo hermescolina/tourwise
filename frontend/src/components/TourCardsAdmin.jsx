@@ -1,7 +1,126 @@
+import { useSearchParams } from 'react-router-dom';
 import { apiBaseTour, frontendBase } from '../config';
 import { useEffect, useState } from 'react';
 import './TourCardsAdmin.css'; 
 import RoomTypeSelector from "./RoomTypeSelector";
+
+// ---------- Caching helpers (additions; nothing removed below) ----------
+// ---------- Caching helpers (additions; nothing removed below) ----------
+const nowMs = () => Date.now();
+const CACHE_TTL_MS = 360 * 60 * 1000; // ✨ CACHE: 5 minutes default TTL
+    // ✨ CACHE: simple time helper
+
+const parseTTLms = (strategy) => {
+    if (typeof strategy !== "string" || !strategy.startsWith("TTL")) return 0;
+
+    const unit = strategy.slice(3).toUpperCase(); // e.g., "5M", "1H"
+    const n = parseInt(unit, 10);
+
+    if (!Number.isFinite(n) || n <= 0) return 0;
+
+    if (unit.endsWith("S")) return n * 1000;               // seconds
+    if (unit.endsWith("M")) return n * 60 * 1000;          // minutes
+    if (unit.endsWith("H")) return n * 60 * 60 * 1000;     // hours
+    if (unit.endsWith("D")) return n * 24 * 60 * 60 * 1000; // days
+
+    return 0; // unknown unit
+};
+
+
+// ✨ CACHE: read from localStorage, validate expiration
+
+function cacheGet(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return null;
+
+    // normalize numeric fields (protect against strings)
+    const now = nowMs();
+    const expiresNum = obj.expires ? Number(obj.expires) : NaN;
+    const fetchedAtNum = obj.fetchedAt ? Number(obj.fetchedAt) : NaN;
+
+    if (Number.isNaN(expiresNum)) {
+      console.warn(`cacheGet: ${key} has non-numeric expires ->`, obj.expires);
+      return null;
+    }
+
+    // If expires is way far in the future, warn (helps detect wrong-ttl writes)
+    const remaining = expiresNum - now;
+    if (remaining > 24 * 60 * 60 * 1000) { // greater than 24 hours
+      console.warn(`cacheGet: ${key} expires far in future (${(remaining/3600000).toFixed(2)}h). Possible stale write?`, { expires: expiresNum, now });
+    }
+
+    // expired -> treat as not found
+    if (expiresNum < now) return null;
+
+    // normalize back into the object so callers see numbers
+    obj.expires = expiresNum;
+    if (!Number.isNaN(fetchedAtNum)) obj.fetchedAt = fetchedAtNum;
+
+    // debug lines you had
+
+    return obj; // { data, etag, expires, fetchedAt? }
+  } catch (e) {
+    console.error("cacheGet: failed to read/parse cache key", key, e);
+    return null;
+  }
+}
+
+
+// ✨ CACHE: write to localStorage with TTL and fetchedAt guard
+function cacheSet(key, { data, etag = null, ttl = CACHE_TTL_MS, fetchedAt = null }) {
+  const now = nowMs();
+  const incomingFetchedAt = fetchedAt ? Number(fetchedAt) : now;
+  const payload = {
+    data,
+    etag,
+    fetchedAt: incomingFetchedAt,
+    expires: now + Math.max(0, ttl),
+  };
+
+  try {
+    const rawExisting = localStorage.getItem(key);
+    if (rawExisting) {
+      try {
+        const existing = JSON.parse(rawExisting);
+        const existingFetchedAt = existing && existing.fetchedAt ? Number(existing.fetchedAt) : 0;
+        // Prevent stale overwrite: only write when incoming is newer-or-equal
+        if (existingFetchedAt > incomingFetchedAt) {
+          console.warn(`cacheSet: skipping stale write for ${key} (existing ${existingFetchedAt} > incoming ${incomingFetchedAt})`);
+          return false;
+        }
+      } catch (e) {
+        console.warn('cacheSet: failed to parse existing payload, will overwrite', e);
+        // fallthrough to write
+      }
+    }
+
+    localStorage.setItem(key, JSON.stringify(payload));
+    console.log(`cacheSet: wrote ${key}`, { fetchedAt: incomingFetchedAt, expires: payload.expires, etag });
+    return true;
+  } catch (err) {
+    console.error('cacheSet: localStorage.setItem failed', err);
+    return false;
+  }
+}
+
+// ✨ CACHE: convenience to show cached data immediately if present
+function primeStateFromCache(cacheKey, setter) {
+    const cached = cacheGet(cacheKey);
+    if (cached?.data) setter(cached.data);
+    return cached; // return to reuse its etag
+}
+
+async function probeBackend(clientVer) {
+  const PROBE_URL = `${apiBaseTour}/api/tca/tourcardsadmin-probe`;
+  const res = await fetch(`${PROBE_URL}?ver=${encodeURIComponent(clientVer || "")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error("probe failed: " + res.status);
+  const text = (await res.text()).trim();
+  return text; // raw value from backend
+}
 
 export default function BrowseTours() {
   const [tours, setTours] = useState([]);
@@ -17,140 +136,220 @@ export default function BrowseTours() {
   const safeMinPrice = Number(minPrice) || 0;
   const safeMaxPrice = Number(maxPrice) || 15000;
 
-  // ---------- Caching helpers (additions; nothing removed below) ----------
-  const CACHE_KEY = 'BrowseTours:/api/touradmin-data';
+  const [searchParams] = useSearchParams();
 
-  const qsStrategy = (() => {
-    try {
-      return new URLSearchParams(window.location.search).get('strategy');
-    } catch {
-      return null;
+  const PROBE_INTERVAL_MS = 60_000; // 1 minute
+
+  function skipFetchUseCache(cachedEntry, ttl, setTours) {
+        const now = Date.now();
+        const expiresAt = cachedEntry.expires;
+        const remainingMs = Math.max(0, expiresAt - now);
+        const writtenAt = expiresAt - ttl;
+        const ageMs = Math.max(0, now - writtenAt);
+        console.log(".... Skipping fetch — TTL still valid:", {
+            ttl,
+            ageMs,
+            remainingMs,
+            writtenAt: new Date(writtenAt).toLocaleString(),
+            expiresAt: new Date(expiresAt).toLocaleString()
+        });
+        setTours(cachedEntry.data || []);
+        return; // important: skip network when TTL valid
     }
-  })();
 
-  const STRATEGY = (qsStrategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
+  let currentReqId = 0;
+  let currentController = null;
 
- 
-  const parseTTLms = (strategy) => {
-    if (typeof strategy !== "string" || !strategy.startsWith("TTL")) return 0;
-
-    const unit = strategy.slice(3).toUpperCase(); // e.g., "5M", "1H"
-    const n = parseInt(unit, 10);
-
-    if (!Number.isFinite(n) || n <= 0) return 0;
-
-    if (unit.endsWith("S")) return n * 1000;               // seconds
-    if (unit.endsWith("M")) return n * 60 * 1000;          // minutes
-    if (unit.endsWith("H")) return n * 60 * 60 * 1000;     // hours
-    if (unit.endsWith("D")) return n * 24 * 60 * 60 * 1000; // days
-
-    return 0; // unknown unit
-  };
-
-
-  const loadFromCache = () => {
-    try {
-      const raw = localStorage.getItem(CACHE_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  };
-
-  const saveToCache = (data, etag) => {
-    try {
-      localStorage.setItem(
-        CACHE_KEY,
-        JSON.stringify({ data, etag: etag || null, ts: Date.now() })
-      );
-    } catch {}
-  };
+  // module-level (once)
+  const inFlightProbes = new Map();  // key -> Promise
+  const _lastProbeAt = new Map();    // key -> nextAllowedTimestamp
 
   const fetchWithStrategy = async () => {
-    const ttl = parseTTLms(STRATEGY);
-    const cached = loadFromCache();
-
-    // TTL short-circuit: trust cache if still fresh
-    if (ttl > 0 && cached && Date.now() - cached.ts < ttl) {
-      setTours(cached.data?.topTours || []);
-      return; // honor "refresh at most every X"
+    const TOUR_CACHE_KEY = 'BrowseTours:/api/tca/tourcardsadmin-data';
+    const key = TOUR_CACHE_KEY;                   // use `key` consistently
+    const reqId = ++currentReqId;
+    let ttl_flag = 0;
+    console.log("...check 1");
+    // Cancel previous pending fetch for fetch API (if any)
+    if (currentController) {
+        try { currentController.abort(); } catch (_) {}
     }
+    console.log("...check 2");
+    
+    // 1) Prime UI from cache (fast paint)
+    const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
+        setTours(cachedData);
+        if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
+    });
 
-    // Build headers (ETag + strategy for backend)
+    console.log("...check 3");
+
+    const strategy = searchParams.get('strategy');
+    const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
+    const ttl = parseTTLms(finalSTR);
+    // Only consider cache-based short-circuit when TTL valid
+    console.log("...check 3.1")
+    if (
+        ttl > 0 &&
+        cachedEntry &&
+        typeof cachedEntry?.expires === 'number' &&
+        Date.now() < cachedEntry?.expires
+    ) {
+        // ensure clientVer is defined
+        ttl_flag = 1;
+        console.log("... ttl_flag", ttl_flag);
+        const clientVer = cachedEntry?.etag ?? "";
+        const now = Date.now();
+        const nextAllowed = _lastProbeAt.get(key) || 0;
+
+        // If still inside cooldown, use cache and stop
+        if (now < nextAllowed) {
+            console.log("⏳ Skipping fetch — still within probe interval", { now, nextAllowed });
+            skipFetchUseCache(cachedEntry, ttl, setTours);
+            return; // stop here
+        }
+
+        // If a probe is already in flight for this key, wait on it, then reuse cache
+        if (inFlightProbes.has(key)) {
+            console.log("➡️ Probe already running for key, awaiting existing probe");
+            try {
+                await inFlightProbes.get(key);
+            } catch (e) {
+                console.warn("inFlight probe failed", e);
+            }
+            // after awaiting the probe, cachedEntry should still be valid — reuse it
+            skipFetchUseCache(cachedEntry, ttl, setTours);
+            return;
+        }
+        console.log("...check 4");
+
+        // Reserve next allowed probe time immediately to avoid races
+        _lastProbeAt.set(key, Date.now() + PROBE_INTERVAL_MS);
+        console.log("...check 4.1");
+        // Start the probe (store the Promise so other callers can await)
+        const probePromise = (async () => {
+        try {
+            const updateNeeded = await probeBackend(clientVer);
+            console.log("... updateNeeded", updateNeeded)
+
+            if (updateNeeded === "0") {
+                console.log("... probe says no update — use cache");
+                skipFetchUseCache(cachedEntry, ttl, setTours);
+                return { stoppedEarly: true };
+            }
+
+            // probe indicates update needed; caller will continue to actual fetch afterwards
+            console.log("... probe says updateNeeded, proceed to network fetch");
+            return { stoppedEarly: false };
+        } catch (err) {
+            console.error("probeBackend error:", err);
+            // Allow retry later by removing nextAllowed marker
+            _lastProbeAt.delete(key);
+            // throw err;
+            return { stoppedEarly: false }; // continue to actual fetch
+        } finally {
+            console.log("... final needed")
+            inFlightProbes.delete(key);
+        }
+        })();
+        console.log("...check 5");
+        // save the promise so concurrent calls won't start a second probe
+        inFlightProbes.set(key, probePromise);
+        // wait for the probe to finish, and inspect result
+        let probeResult;
+        try {
+            probeResult = await probePromise;
+        } catch (err) {
+        // probe failed — decide your fallback: here we bail out and reuse cache
+            console.warn("probe failed, falling back to cache:", err);
+            skipFetchUseCache(cachedEntry, ttl, setTours);
+            return;
+        }
+        // If the probe told us to stop early, we already used cache above
+        if (probeResult?.stoppedEarly) {
+            return;
+        }
+
+        // else: probe indicates updateNeeded !== "0", so fallthrough to actual fetch
+    }
+    console.log("...ttl_flag outside", ttl_flag)
+    // ---- actual network fetch (runs only if TTL invalid or probe decided updateNeeded) ----
     const headers = {};
-    if (cached?.etag) headers['If-None-Match'] = cached.etag;
-    headers['X-Cache-Strategy'] = STRATEGY;
-
-    // Build URL (FORCEREFRESH → ?refresh=1)
-    let url = `${apiBaseTour}/api/touradmin-data`;
-
-
-    if (STRATEGY === 'FORCEREFRESH') {
-      url += (url.includes('?') ? '&' : '?') + 'refresh=1';
+    if (cachedEntry?.etag) {
+        headers['If-None-Match'] = cachedEntry.etag;
+        console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
     }
+
+    currentController = new AbortController();
+    const signal = currentController.signal;
+    console.log("... signal", signal)
 
     try {
-      const res = await fetch(url, { headers });
-
-      // 304 → use cache
-      if (res.status === 304 && cached) {
-        setTours(cached.data?.topTours || []);
-        return;
-      }
-
-      // Non-OK but have cache → graceful fallback
-      if (!res.ok) {
-        if (cached) {
-          setTours(cached.data?.topTours || []);
-          return;
+        const res = await fetch(`${apiBaseTour}/api/tca/tourcardsadmin-data`, { headers, signal });
+        console.log(".... check pass 1")
+        // stale-response guard 1234
+        if (reqId !== currentReqId && ttl_flag === 0) { 
+            console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
+            console.log(".... check pass 13")
+            return;
         }
-        throw new Error(`HTTP ${res.status}`);
-      }
+        console.log(".... check pass 2")
 
-      // OK → store new data + ETag
-      // const data = await res.json();
-      let data;
-      try {
-          data = await res.json();
-      } catch (e) {
-          console.error("Failed to fetch Data:",e)
-          return null;
-      }
+        // 304 → reuse cached entry and update expires perhaps
+        if (res.status === 304 && cachedEntry?.data) {
+            console.log(".... ♻️ Using cached data, ETag matched:", cachedEntry.etag);
+            cacheSet(TOUR_CACHE_KEY, { data: cachedEntry.data, etag: cachedEntry.etag, ttl, fetchedAt: Date.now() });
+            setTours(cachedEntry.data || []);
+            return;
+        }
 
-      // const etag = res.headers.get('ETag');
-      let etag;
-      try {
-        etag = res.headers.get('ETag');
-      } catch (e) {
-        console.error("Failed to get ETag:", e)
-        return null;
-      }
-      try {
-        saveToCache(data, etag);
-      } catch (e) {
-      }
+        console.log(".... check pass 3")
 
-      try {
-        setTours(data.topTours || []);
-      } catch (e) {
-      }
+        if (!res.ok) {
+            console.error('fetchWithStrategy: non-ok response', res.status);
+            return;
+        }
+
+        console.log(".... check pass 4")
+        let data;
+        try {
+            data = await res.json();
+        } catch (error) {
+            console.error('❌ Failed to parse data:', error);
+            return;
+        }
+
+        const etag = res.headers.get('ETag') || null;
+        
+        cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
+
+        if (reqId === currentReqId || ttl_flag === 1) {
+            setTours(data || []);
+            console.log("...done");
+        } else {
+            console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setTours');
+        }
     } catch (err) {
-      console.error('❌ Failed to load tours:', err);
-      // Network error fallback: cache if present
-      if (cached) {
-        setTours(cached.data?.topTours || []);
-      } else {
-        setTours([]); // preserve existing behavior
-      }
+        if (err.name === 'AbortError') {
+            console.log('fetchWithStrategy: aborted previous fetch');
+        } else {
+            console.error('fetchWithStrategy: fetch failed', err);
+        }
     }
   };
+  
   // ---------- end helpers ----------
 
   useEffect(() => {
     fetchWithStrategy();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // keep original lifecycle: run once on mount
+
+  // useEffect(() => {
+  //   const timeout = setTimeout(() => fetchWithStrategy(), 200);
+  //   return () => clearTimeout(timeout);
+  // }, [dependencies]);
+
 
   const handleOptionChange = (slug, option) => {
     setSelectedOptions(prev => ({
@@ -160,8 +359,7 @@ export default function BrowseTours() {
   };
 
 
-  const handleCardClick = (tour) => { 
-    const slug = tour?.slug;
+  const handleCardClick = (slug) => { 
     if (!slug) return; // guard
 
     const selectedOption = selectedOptions[slug] || 'itinerary';
@@ -197,13 +395,12 @@ export default function BrowseTours() {
         'tour-owner-info': 'upload-owner',
       }[key] || 'upload-itinerary';
 
-    window.location.href = `/tourism-analytics/${path}/${encodeURIComponent(slug)}`;
+    window.location.href = `/tourism-analytics/${path}/${encodeURIComponent(slug)}?strategy=ttl1h`;
   };
 
 
   const getImageUrl = (imagePath, title) => {
     if (!imagePath) return '/default.jpg';
-    // console.log('Image Path:', imagePath);
     return imagePath.startsWith('/images/')
       ? `${frontendBase}/tourism-analytics${imagePath}`
       : `${apiBaseTour}${imagePath}`;
@@ -232,19 +429,24 @@ export default function BrowseTours() {
   
   const normalize = str => str.toLowerCase().replace(/\s+/g, '');
 
-  const filteredTours = tours.filter(tour => {
+  const filteredTours = tours.filter(item => {
+    const tour = item.tour; // adjust to actual structure
+    if (!tour) return false;
     const searchNormalized = normalize(searchTerm);
     const locationFilterNormalized = normalize(locationFilter);
     const titleNormalized = normalize(tour.title || '');
     const locationNormalized = normalize(tour.location || '');
     const priceValue = Number(tour.price);
+
     const matchesSearch = titleNormalized.startsWith(searchNormalized);
     const matchesLocation = locationNormalized.startsWith(locationFilterNormalized);
     const matchesPrice = priceValue >= safeMinPrice && priceValue <= safeMaxPrice;
-    return matchesSearch && matchesLocation && matchesPrice;
-  });
 
-  console.log("data",filteredTours)
+    return matchesSearch && matchesLocation && matchesPrice;
+});
+
+
+  // console.log("data",filteredTours)
   return (
     <div className="browse-container">
       <div className="browseWrapper">
@@ -347,15 +549,15 @@ export default function BrowseTours() {
       
         <div className="tour-grid">
             {filteredTours
-              .filter((tour) => {
+              .filter((item) => {
+                const tour = item.tour; 
                 const match = selectedChildId.id === 0 || tour.category_id === selectedChildId.id;
-                // console.log(`Selected: ${selectedChildId.id} | Tour category_id: ${tour.category_id} | Match: ${match}`);
                 return match;
               })
-              .map((tour, index) => (
-                <div key={index} className="tour-card">
-                  {/* {console.log("CAT ID ", tour.category_id)} */}
-                  {/* {console.log('Tour image URL:', getImageUrl(tour.image, tour.title))} */}
+              .map((item, index) => {
+                    const tour = item.tour;
+                  return (
+                  <div key={index} className="tour-card">
                   <img
                     src={getImageUrl(tour.image, tour.title)}
                     alt={tour.title}
@@ -369,10 +571,10 @@ export default function BrowseTours() {
                     </p>
 
                     {/* ✅ Category Buttons */}
-                  {console.log("TOUR TYPE ==?",tour.item_type)}
                   {tour.item_type === "tour" && (
                       <div>
                         {/* Tour-specific UI here */}
+
                         <div className="tour-category-buttons" style={{ marginTop: '0.5rem' }}>
                       {['itinerary', 'history', 'Inclusion'].map(option => (
                         <button
@@ -433,10 +635,9 @@ export default function BrowseTours() {
                     )}
 
                     
-
                     {/* ✅ Go Button */}
                     <button
-                      onClick={() => handleCardClick(tour)}
+                      onClick={() => handleCardClick(tour?.slug)}
                       style={{
                         marginTop: '0.8rem',
                         padding: '6px 14px',
@@ -452,7 +653,7 @@ export default function BrowseTours() {
                     </button>
                   </div>
                 </div>
-              ))}
+              )})}
 
             {tours.length === 0 && (
               <p className="no-results-message">No tours to display.</p>

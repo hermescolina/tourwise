@@ -24,6 +24,9 @@ import TourDetailsAdmin from './pages/TourDetailsAdmin';
 import TestPage from './pages/TestPage'; // Import the test page
 
 
+
+
+
 // ✅ ADD THIS HELPER COMPONENT
 // Its only job is to ensure the URL has a trailing slash.
 
@@ -31,6 +34,7 @@ export default function App() {
   return (
     <Router basename="/tourism-analytics/">
       <Routes>
+        
         {/* ✅ Home landing page */}
         <Route 
           path="/" 

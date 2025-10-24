@@ -5,16 +5,15 @@ services:
   db:
     image: mysql:8.0
     container_name: mysql_db
-    # Only expose if you need to access from host, otherwise internal network access is sufficient
     ports:
       - "3306:3306"
     env_file:
-      - ./backend/tour_api/.env.tours # Assuming this .env has DB credentials for all
+      - ./backend/tour_api/.env.tours
     volumes:
       - db_data:/var/lib/mysql
       - ./mysql-init:/docker-entrypoint-initdb.d
-    restart: always # Added restart policy
-    healthcheck: # Added health check for DB
+    restart: always
+    healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
       retries: 10
@@ -32,18 +31,19 @@ services:
     working_dir: /app
     env_file:
       - ./backend/tour_api/.env.tours
-    # Removed extra_hosts as service discovery within Docker Compose network is preferred
     environment:
       FLASK_APP: main.py
       FLASK_ENV: development
+      FLASK_DEBUG: 1
       APP_ENV: development
-      # Make sure your .env.tours has DB_HOST=db and other API URLs
+      # Optionally set REDIS_HOST in this env block or in .env.tours:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     command: flask run --host=0.0.0.0 --port=3001
-    depends_on: # Ensures DB starts before API (not a guarantee of readiness, use healthcheck)
+    depends_on:
       db:
-        condition: service_healthy # Use healthcheck condition if healthcheck is defined
+        condition: service_healthy
     restart: always
-    # Example healthcheck for Flask (requires a /health endpoint in your Flask app)
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
       interval: 30s
@@ -66,7 +66,6 @@ services:
       FLASK_APP: hotel_app.py
       FLASK_ENV: development
       APP_ENV: development
-      # Make sure your .env.hotels has DB_HOST=db
     command: flask run --host=0.0.0.0 --port=5000
     depends_on:
       db:
@@ -88,7 +87,6 @@ services:
       FLASK_APP: car_app.py
       FLASK_ENV: development
       APP_ENV: development
-      # Make sure your .env.cars has DB_HOST=db
     command: flask run --host=0.0.0.0 --port=5001
     depends_on:
       db:
@@ -103,18 +101,28 @@ services:
       - "5173:5173"
     volumes:
       - ./frontend:/app
-      - /app/node_modules # Important to prevent host's node_modules from overwriting container's
+      - /app/node_modules
     working_dir: /app
     command: ["npm", "run", "dev"]
-    # If frontend needs to wait for APIs to be ready, you could add depends_on
-    # depends_on:
-    #   tour_api:
-    #     condition: service_started
-    #   hotel_api:
-    #     condition: service_started
-    #   car_api:
-    #     condition: service_started
     restart: always
+
+  # ---------- Redis service added ----------
+  redis:
+    image: redis:7-alpine
+    container_name: redis_local
+    ports:
+      - "6379:6379"       # host:container - change left side if host port conflict
+    volumes:
+      - redis-data:/data   # persist dump/aof to a volume (useful for dev)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    # networks: default (compose will attach to default network so services can reach 'redis')
+  # ------------------------------------------
 
 volumes:
   db_data:
+  redis-data:

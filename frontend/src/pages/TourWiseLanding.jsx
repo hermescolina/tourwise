@@ -9,6 +9,14 @@ import '@fortawesome/fontawesome-free/css/all.min.css';
 // ✨ CACHE: add lightweight cache helpers + defaults
 const CACHE_TTL_MS = 360 * 60 * 1000; // ✨ CACHE: 5 minutes default TTL
 const nowMs = () => Date.now();     // ✨ CACHE: simple time helper
+const PROBE_INTERVAL_MS = 6_000; // 1 minute
+const _lastProbeAt = new Map();    // key -> nextAllowedTimestamp
+const TOUR_CACHE_KEY = 'tour-data-landing';
+const key = TOUR_CACHE_KEY;  
+_lastProbeAt.set(key, nowMs() + PROBE_INTERVAL_MS);
+const nextAllowed = _lastProbeAt.get(key) || 0;
+
+
 
 const parseTTLms = (strategy) => {
     if (typeof strategy !== "string" || !strategy.startsWith("TTL")) return 0;
@@ -33,7 +41,6 @@ function cacheGet(key) {
 
     const obj = JSON.parse(raw);
     if (!obj || typeof obj !== 'object') return null;
-
     // normalize numeric fields (protect against strings)
     const now = nowMs();
     const expiresNum = obj.expires ? Number(obj.expires) : NaN;
@@ -58,7 +65,6 @@ function cacheGet(key) {
     if (!Number.isNaN(fetchedAtNum)) obj.fetchedAt = fetchedAtNum;
 
     // debug lines you had
-
     return obj; // { data, etag, expires, fetchedAt? }
   } catch (e) {
     console.error("cacheGet: failed to read/parse cache key", key, e);
@@ -78,7 +84,6 @@ function cacheSet(key, { data, etag = null, ttl = CACHE_TTL_MS, fetchedAt = null
     expires: now + Math.max(0, ttl),
   };
 
-  console.log("333 expires from cacheSet",now + Math.max(0, ttl))
 
   try {
     const rawExisting = localStorage.getItem(key);
@@ -96,7 +101,6 @@ function cacheSet(key, { data, etag = null, ttl = CACHE_TTL_MS, fetchedAt = null
         // fallthrough to write
       }
     }
-
     localStorage.setItem(key, JSON.stringify(payload));
     console.log(`cacheSet: wrote ${key}`, { fetchedAt: incomingFetchedAt, expires: payload.expires, etag });
     return true;
@@ -113,6 +117,59 @@ function primeStateFromCache(cacheKey, setter) {
     return cached; // return to reuse its etag
 }
 
+async function probeBackend(ver) {
+  const PROBE_URL = `${apiBaseTour}/api/tl/tourlandingpages-probe`;
+  const url = `${PROBE_URL}?ver=${encodeURIComponent(ver)}`;
+  
+  // timeout (ms) — tune to your environment
+  const TIMEOUT_MS = 7000;
+
+  // AbortController for fetch timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  
+  
+  try {
+    console.log("[probeBackend] fetching:", url, "navigator.onLine:", navigator.onLine);
+
+    const res = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { 
+        "Accept": "text/plain"         // existing header
+      }
+    });
+    
+    clearTimeout(timeoutId);
+
+    console.log("[probeBackend] fetch completed status:", res.status, "ok:", res.ok);
+
+    // catch non-OK early
+    if (!res.ok) {
+      // read body if possible for debugging
+      const body = await res.text().catch(() => "<body read failed>");
+      console.error("[probeBackend] non-ok response:", res.status, body.slice(0, 200));
+      throw new Error("probe failed: " + res.status);
+    }
+
+    const text = (await res.text()).trim();
+
+    const returnedRedisTTL = res.headers.get("X-Redis-TTL");
+    return [text, returnedRedisTTL];
+
+    // return text;
+  } catch (err) {
+    clearTimeout(timeoutId); // ensure cleanup
+
+    if (err.name === "AbortError") {
+      console.error("[probeBackend] fetch aborted due to timeout:", TIMEOUT_MS, "ms", url);
+      throw new Error("probe timeout");
+    }
+
+    console.error("[probeBackend] fetch error:", err);
+    throw err; // rethrow so caller can handle retry logic
+  }
+}
 
 
 const base = `${frontendBase}/tourism-analytics/`;
@@ -259,110 +316,161 @@ export default function TourWiseLanding() {
         }
     }, [location, navigate]);
 
+
+    function skipFetchUseCache(cachedEntry, ttl, redisTTL, setItems) {
+            const now = Date.now();
+            const expiresAt = cachedEntry.expires;
+            const remainingMs = Math.max(0, expiresAt - now);
+            const writtenAt = expiresAt - ttl;
+            const ageMs = Math.max(0, now - writtenAt);
+            console.log("Skipping fetch — TTL` still valid:", {
+                ttl,
+                ageMs,
+                remainingMs,
+                writtenAt: new Date(writtenAt).toLocaleString(),
+                expiresAt: new Date(expiresAt).toLocaleString(),
+                redisTTL
+            });
+            setItems(cachedEntry.data || []);
+            return; // important: skip network when TTL valid
+        }
+
+
     // ========================================================================
     // ✅ UNIFIED DATA FETCHING `useEffect` (This is the core fix)
     // ========================================================================
 
     let currentReqId = 0;
     let currentController = null;
-
-    useEffect(() => {
-        const TOUR_CACHE_KEY = `tour-data-landing`;
+    const inFlightProbes = new Map();  // key -> Promise
+        
+    const fetchWithStrategy = async () => {
         const reqId = ++currentReqId;
-        const startedAt = Date.now();
-        // Cancel any previous pending fetch
-
+        let update_flag = 0;
+        
         if (currentController) {
-            currentController.abort();
+            try { currentController.abort(); } catch (_) {}
         }
-
-        currentController = new AbortController();
-        const signal = currentController.signal;
+        
         const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
-            setItems(cachedData);
-            if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
-        });
+            if (!cachedData) return;
+            setItems(cachedData.data || []);
 
+            if (cachedData.data?.title) {
+                document.title = `TourWise | ${cachedData.data.title}`;
+            }
+        });
+        
         const strategy = searchParams.get('strategy');
         const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
         const ttl = parseTTLms(finalSTR);
-        // console.log(`...Data fetch effect running. Strategy: ${cachedEntry?.expires} | TTL: ${startedAt}`);
 
+        // Only consider cache-based short-circuit when TTL valid
         if (
             ttl > 0 &&
             cachedEntry &&
             typeof cachedEntry?.expires === 'number' &&
             Date.now() < cachedEntry?.expires
         ) {
+            const clientVer = cachedEntry?.etag ?? "";
             const now = Date.now();
-            const expiresAt = cachedEntry.expires;
-            const remainingMs = Math.max(0, expiresAt - now);
-            const writtenAt = expiresAt - ttl;
-            const ageMs = Math.max(0, now - writtenAt);
-
-            console.log(".... Skipping fetch — TTL still valid:", {
-                ttl,
-                ageMs,
-                remainingMs,
-                writtenAt: new Date(writtenAt).toISOString(),
-                expiresAt: new Date(expiresAt).toISOString()
-            });
-            // prime UI already done, so optionally skip fetch entirely
-            return; 
-        }
-
-        const headers = {};
-        if (cachedEntry?.etag) {
-            headers['If-None-Match'] = cachedEntry.etag;
-            console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
-        }
-
-        const ac = new AbortController();
-        const fetchSignal = ac.signal;
-
-        fetch(`${apiBaseTour}/api/tl/tour-landing`, { method: 'GET', headers, signal: ac.signal })
-            .then(async res => {
-                if (ac.signal.aborted) return;
-
-                if (reqId !== currentReqId) {
-                    console.warn('fetchWithStrategy: ignoring stale response', { reqId, currentReqId });
-                    return {};
-                }
-                console.log("...res.status", res.status)
-                if (res.status === 304 && cachedEntry?.data && !ac.signal.aborted) {
-                    console.log("...♻️ Using cached data, ETag matched:", cachedEntry.expires);
-                    setItems(cachedEntry.data);
-                    return;
-                }
-
-                if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
-
-                const text = await res.text();
-
+            
+            const probePromise = (async () => {
                 try {
-                    const data = JSON.parse(text);
+                    // const updateNeeded = await probeBackend(clientVer); //1234
+                    const updateNeeded = await probeBackend(clientVer);
 
-                    if (!data) return; // nothing to do
-                    console.log("... set items")
-                    setItems(data);
+                    // const updateNeeded = await probeBackend(clientVer);
+                    if (updateNeeded[0] === "0") {
+                        console.log("probe says no update — use cache");
+                        skipFetchUseCache(cachedEntry, ttl, updateNeeded[1], setItems);
+                        return { stoppedEarly: true };
+                    } else {update_flag = 1; }
 
-                    if (fetchSignal.aborted) return;
-
-                    const etag = res.headers.get("ETag") || null;
-
-                    // Always cache fresh data (and bump TTL even for 304)
-                    cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
-                } catch (jsonErr) {
-                    console.error("❌ JSON parse error:", jsonErr);
+                    // probe indicates update needed; caller will continue to actual fetch afterwards
+                    console.log("probe says updateNeeded, proceed to network fetch");
+                    return { stoppedEarly: false };
+                } catch (err) {
+                    console.error("probeBackend error:", err);
+                    // Allow retry later by removing nextAllowed marker
+                    _lastProbeAt.delete(key);
+                    // throw err;
+                    return { stoppedEarly: false }; // continue to actual fetch
+                } finally {
                 }
-            })
-            .catch(err => {
-                if (!ac.signal.aborted) {
-                    console.error("222 ❌ Fetch failed:", err);
-                }
-            });
-        return () => ac.abort();
-    }, [searchParams]);
+            })();
+            
+            // save the promise so concurrent calls won't start a second probe
+            const { stoppedEarly } = await probePromise;
+        if (stoppedEarly) {
+            return; // skip network fetch
+        }
+        }
+
+        // ---- actual network fetch (runs only if TTL invalid or probe decided updateNeeded) ----
+        const headers = {};
+        
+        if (cachedEntry?.etag && update_flag === 0) {
+            headers['If-None-Match'] = cachedEntry.etag;
+            console.log("→ Sending If-None-Match:", headers['If-None-Match']);
+        }
+        
+        currentController = new AbortController();
+        const signal = currentController.signal;
+        
+        try {
+            const res = await fetch(`${apiBaseTour}/api/tl/tour-landing`, { headers, signal });
+            // stale-response guard 1234
+            if (reqId !== currentReqId && update_flag === 0) { 
+                console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
+                return;
+            }
+
+            if (res.status === 304 && cachedEntry?.data) {
+                console.log("♻️ Using cached data, ETag matched:", cachedEntry.etag);
+                setItems(cachedEntry.data || []);
+                return;
+            }
+            if (!res.ok) {
+                console.error('fetchWithStrategy: non-ok response', res.status);
+                return;
+            }
+
+            let data;
+            try {
+                data = await res.json();
+                
+            } catch (error) {
+                console.error('❌ Failed to parse data:', error);
+                return;
+            }
+            
+            const etag = res.headers.get('ETag') || null;
+            const redisTtl = res.headers.get('X-Redis-TTL');
+            
+            cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
+
+    
+            if (reqId === currentReqId || update_flag === 1) {
+                setItems(data || []);
+            } else {
+                console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setItems');
+            }
+            if(update_flag === 1)update_flag = 0;
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                console.log('fetchWithStrategy: aborted previous fetch');
+            } else {
+                console.error('fetchWithStrategy: fetch failed', err);
+            }
+        }
+      };
+
+
+    useEffect(() => {
+        fetchWithStrategy();
+    }, []); 
+      
 
     const Navbar = () => {
         const [menuOpen, setMenuOpen] = useState(false);
@@ -428,14 +536,6 @@ export default function TourWiseLanding() {
             </header >
         );
     };
-
-    useEffect(() => {
-        if (items?.length > 0) {
-            const parsedItems = items.map(item => typeof item === "string" ? JSON.parse(item) : item);
-            console.log("parse",parsedItems[0]?.tour?.type);
-        }
-
-    }, [items]);
 
     // ✅ Show loading or empty state
     if (!items) {
@@ -588,7 +688,6 @@ export default function TourWiseLanding() {
                                 key={index}
                                 onClick={() => navigate(`/hotel/${hotel.slug}`)}
                             >
-                                {console.log("222 hotel: ",hotel)}
                                 {hotel.image && ( // ✅ Use correct field: card_image (from API)
                                     <img
                                         src={getStaticImageUrl(hotel.image)}

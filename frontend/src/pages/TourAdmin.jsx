@@ -173,13 +173,12 @@ export default function TourAdmin() {
     const TOUR_CACHE_KEY = 'BrowseTours:/api/ta/touradmin-data';
     const key = TOUR_CACHE_KEY;                   // use `key` consistently
     const reqId = ++currentReqId;
+    let ttl_flag = 0;
 
     // Cancel previous pending fetch for fetch API (if any)
     if (currentController) {
         try { currentController.abort(); } catch (_) {}
     }
-    currentController = new AbortController();
-    const signal = currentController.signal;
 
     // 1) Prime UI from cache (fast paint)
     const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
@@ -200,6 +199,7 @@ export default function TourAdmin() {
         Date.now() < cachedEntry.expires
     ) {
         // ensure clientVer is defined
+        
         const clientVer = cachedEntry?.etag ?? "";
         const now = Date.now();
         const nextAllowed = _lastProbeAt.get(key) || 0;
@@ -236,6 +236,8 @@ export default function TourAdmin() {
                 console.log("... probe says no update — use cache");
                 skipFetchUseCache(cachedEntry, ttl, setTours);
                 return { stoppedEarly: true };
+            } else {
+                ttl_flag = 1;
             }
 
             // probe indicates update needed; caller will continue to actual fetch afterwards
@@ -279,12 +281,16 @@ export default function TourAdmin() {
         headers['If-None-Match'] = cachedEntry.etag;
         console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
     }
-    console.log(".... check pass 1")
+
+    currentController = new AbortController();
+    const signal = currentController.signal;
+    console.log(".... check pass 1",signal)
+    
     try {
         const res = await fetch(`${apiBaseTour}/api/ta/touradmin-data`, { headers, signal });
         console.log(".... check pass 2")
         // stale-response guard
-        if (reqId !== currentReqId) {
+        if (reqId !== currentReqId && ttl_flag === 0) {
             console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
             console.log(".... check pass 3")
             return;
@@ -318,9 +324,10 @@ export default function TourAdmin() {
         
         cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
 
-        if (reqId === currentReqId) {
+        if (reqId === currentReqId || ttl_flag === 1) {
+            console.log("...b4 done data",data);
             setTours(data || []);
-            console.log("...done");
+            console.log("...done",tours);
         } else {
             console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setTours');
         }

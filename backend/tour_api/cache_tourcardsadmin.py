@@ -1,13 +1,13 @@
-# bp_touradminpages_touradminpages.py
-import os, json, hashlib
+# bp_tourcardsadmin_tourcardsadmin.py
+import os, json, hashlib, time
 from flask import Blueprint, jsonify, request, send_file, abort, current_app
 import mysql.connector
 from dotenv import load_dotenv
 
-bp_touradmin = Blueprint("touradminpages", __name__)
+bp_tourcardsadmin = Blueprint("tourcardsadmin", __name__)
 
 # ---- Config ---------------------------------------------------------------
-env_file = ".env.development" if os.getenv("bp_touradminpages_ENV") == "development" else ".env.tours"
+env_file = ".env.development" if os.getenv("bp_tourcardsadmin_ENV") == "development" else ".env.tours"
 load_dotenv(dotenv_path=env_file)
 
 tours_db_config = {
@@ -18,12 +18,12 @@ tours_db_config = {
     "port": int(os.getenv("TOUR_DB_PORT", "3306")),
 }
 
-CACHE_FILE = os.getenv("touradminpages_CACHE", "/var/lib/tourwise/touradminpages.json")
+CACHE_FILE = os.getenv("tourcardsadmin_CACHE", "/var/lib/tourwise/tourcardsadmin.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
 # 🔎 boot diagnostics (prints once at import)
-print(f"[touradminpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
-print(f"[touradminpages] touradminpages_CACHE={CACHE_FILE}", flush=True)
+print(f"[tourcardsadmin] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
+print(f"[tourcardsadmin] tourcardsadmin_CACHE={CACHE_FILE}", flush=True)
 
 # ---- File helpers ---------------------------------------------------------
 def _read_file(path: str):
@@ -59,7 +59,7 @@ def _write_atomic(path: str, content) -> None:
 # ---- DB helpers -----------------------------------------------------------
 
 
-def _fetch_touradminpages_json():
+def _fetch_tourcardsadmin_json():
     conn = mysql.connector.connect(**tours_db_config)
     try:
         cur = conn.cursor()
@@ -78,7 +78,7 @@ def _fetch_touradminpages_json():
         conn.close()
 
 
-def get_touradminpages_token():
+def get_tourcardsadmin_token():
     conn = mysql.connector.connect(**tours_db_config)
     """
     Generate a lightweight tourpage token for caching purposes.
@@ -105,11 +105,11 @@ def get_touradminpages_token():
         cur.close()
 
 
-def get_touradminpages_version():
+def get_tourcardsadmin_version():
     conn = mysql.connector.connect(**tours_db_config)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT v FROM tourpages_meta WHERE k='touradminpage'")
+        cur.execute("SELECT v FROM tourpages_meta WHERE k='tourcardsadmin'")
         row = cur.fetchone()
         if not row:
             return None
@@ -119,63 +119,6 @@ def get_touradminpages_version():
         cur.close()
 
 #NEED TO CHANGE REFRESH LOGIC
-# @bp_touradmin.route("/touradmin-data", methods=["GET"])
-# def get_touradminpages():
-#     current_app.logger.info("➡️ Entered /touradminpages route")
-#     force = request.args.get("refresh") in ("1", "true", "True") #need to change this to dynamic approach encrypte 
-#                                                                  #encrypted keyword = encrypted value "s8d7f6asd87f = 8s6df8sd"
-#     inm = request.headers.get("If-None-Match")
-#     current_app.logger.info(f"Query params: force={force}, If-None-Match={inm}")
-
-#     # Default: no file cache unless configured
-#     cached_json = None
-#     cached_ver = None
-
-#     if CACHE_FILE:
-#         current_app.logger.info(f"Using CACHE_FILE={CACHE_FILE}")
-#         cached_json = _read_file(CACHE_FILE)
-#         cached_ver_raw = _read_file(CACHE_FILE + ".ver")
-#         cached_ver = cached_ver_raw.strip() if cached_ver_raw else None
-#         current_app.logger.info(f"Loaded cache: cached_ver={cached_ver}, cached_json_len={len(cached_json) if cached_json else 0}")
-#     else:
-#         current_app.logger.info("No CACHE_FILE configured, skipping file cache")
-
-#     with mysql.connector.connect(**tours_db_config) as conn:
-#         ver_db = get_touradminpages_version()
-#         token  = get_touradminpages_token() 
-#         ver = (ver_db or token or "").strip()   # <- normalize
-#         current_app.logger.info(f"DB version resolved (normalized): {repr(ver)}")
-#         print("VERSION",ver,flush=True)
-#         print("INM",inm,flush=True)
-#         if not force and inm and inm == ver:
-#             current_app.logger.info("ETag match → returning 304 Not Modified")
-#             return ("", 304, {"ETag": ver})
-#         if not force and cached_json and cached_ver == ver:
-#             current_app.logger.info("Cache hit → returning cached JSON")
-#             return (cached_json, 200, {
-#                 "Content-Type": "application/json; charset=utf-8",
-#                 "ETag": ver
-#             })
-#         current_app.logger.info("Cache miss or forced refresh → fetching fresh JSON from DB")
-        
-#         fresh_json = _fetch_touradminpages_json()
-#     if CACHE_FILE:
-#         current_app.logger.info(f"Writing fresh JSON + version to cache files -> {CACHE_FILE}")
-#         try:
-#             _write_atomic(CACHE_FILE, fresh_json)
-#             _write_atomic(CACHE_FILE + ".ver", (ver + "\n")) 
-#             st = os.stat(CACHE_FILE)
-#             current_app.logger.info(f"Wrote cache OK: size={st.st_size} path={CACHE_FILE}")
-#         except Exception as e:
-#             current_app.logger.exception(f"Failed writing cache: {e}")
-
-
-#     current_app.logger.info("Returning fresh JSON with ETag")
-#     return (fresh_json, 200, {
-#         "Content-Type": "application/json; charset=utf-8",
-#         "ETag": ver
-#     })
-
 # ---- Probe: lightweight endpoint to check if client should refresh -----
 # In-memory small cache for backend version to avoid DB hit on every probe
 _VER_CACHE = {"ver": None, "fetched_at_ms": 0}
@@ -189,8 +132,8 @@ def _get_backend_ver_cached():
         return _VER_CACHE["ver"]
 
     try:
-        ver_db = get_touradminpages_version()
-        token = get_touradminpages_token()
+        ver_db = get_tourcardsadmin_version()
+        token = get_tourcardsadmin_token()
         backend_ver = (ver_db or token or "").strip()
         backend_ver = backend_ver if backend_ver != "" else None
 
@@ -205,8 +148,8 @@ def _get_backend_ver_cached():
         return None
 
 
-@bp_touradmin.route("/touradmin-probe", methods=["GET"])
-def probe_touradmin():
+@bp_tourcardsadmin.route("/tourcardsadmin-probe", methods=["GET"])
+def probe_tourcardsadmin():
     """
     Lightweight probe endpoint.
     Query param: ?ver=<client_version>
@@ -232,9 +175,12 @@ def probe_touradmin():
     return ("0", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
 
 
-@bp_touradmin.route("/touradmin-data", methods=["GET"])
-def get_touradminpages():
-    current_app.logger.info("➡️ Entered /touradminpages route")
+@bp_tourcardsadmin.route("/tourcardsadmin-data", methods=["GET"])
+def get_tourcardsadmin():
+
+    print("I'm inside tourcardsadmin-data",flush=True)
+
+    current_app.logger.info("➡️ Entered /tourcardsadmin route")
 
     force = request.args.get("refresh") in ("1", "true", "True")
     inm = request.headers.get("If-None-Match")
@@ -242,6 +188,8 @@ def get_touradminpages():
 
     cached_json = None
     cached_ver = None
+
+    print("CACHE_FILE====>>>> ",CACHE_FILE,flush=True)
 
     # Try to read file cache if configured (harmless if not present)
     if CACHE_FILE:
@@ -262,8 +210,8 @@ def get_touradminpages():
     ver = ""
     try:
         with mysql.connector.connect(**tours_db_config) as conn:
-            ver_db = get_touradminpages_version()
-            token = get_touradminpages_token()
+            ver_db = get_tourcardsadmin_version()
+            token = get_tourcardsadmin_token()
             ver = (ver_db or token or "").strip()
             current_app.logger.info("DB version resolved (normalized): %r", ver)
             print("VERSION", ver, flush=True)
@@ -298,7 +246,7 @@ def get_touradminpages():
     fresh_json = None
     try:
         current_app.logger.info("Cache miss or forced refresh → fetching fresh JSON from DB")
-        fresh_json = _fetch_touradminpages_json()
+        fresh_json = _fetch_tourcardsadmin_json()
     except Exception:
         current_app.logger.exception("Failed fetching fresh JSON from DB")
         # If fetching failed but we have cached_json, return stale cache as a degraded response
@@ -330,13 +278,13 @@ def get_touradminpages():
     )
 
 
-@bp_touradmin.route("/file", methods=["GET"])
-def get_touradminpages_file():
+@bp_tourcardsadmin.route("/file", methods=["GET"])
+def get_tourcardsadmin_file():
     if not os.path.exists(CACHE_FILE):
         abort(404, description="Cache file not found")
     return send_file(CACHE_FILE, mimetype="application/json")
 
-@bp_touradmin.route("/raw", methods=["GET"])
-def get_touradminpages_raw():
-    fresh = _fetch_touradminpages_json()
+@bp_tourcardsadmin.route("/raw", methods=["GET"])
+def get_tourcardsadmin_raw():
+    fresh = _fetch_tourcardsadmin_json()
     return fresh, 200, {"Content-Type": "application/json; charset=utf-8"}

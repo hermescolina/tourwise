@@ -1,8 +1,9 @@
 # bp_tourlandingpages_tourlandingpages.py
-import os, json, hashlib
+import os, json, hashlib, time, logging
 from flask import Blueprint, jsonify, request, send_file, abort, current_app
 import mysql.connector
 from dotenv import load_dotenv
+from redis_client import redis_client
 
 bp_tourlandingpages = Blueprint("tourlandingpages", __name__)
 
@@ -21,9 +22,19 @@ tours_db_config = {
 CACHE_FILE = os.getenv("tourlandingpages_CACHE", "/var/lib/tourwise/tourlandingpages.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
+# Redis keys & TTL
+REDIS_KEY_JSON = os.getenv("TOURWISE_REDIS_KEY_JSON", "tourwise:landing:json")
+REDIS_KEY_VER = os.getenv("TOURWISE_REDIS_KEY_VER", "tourwise:landing:ver")
+REDIS_TTL = int(os.getenv("TOURWISE_REDIS_TTL", str(60 * 60)))  # default 1 hour
+
+# Toggle to disable redis entirely (use "false" to disable)
+USE_REDIS = os.getenv("TOURWISE_USE_REDIS", "true").lower() != "false"
+
 # 🔎 boot diagnostics (prints once at import)
 print(f"[tourlandingpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
 print(f"[tourlandingpages] tourlandingpages_CACHE={CACHE_FILE}", flush=True)
+print(f"[tourlandingpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
+
 
 # ---- File helpers ---------------------------------------------------------
 def _read_file(path: str):
@@ -33,12 +44,27 @@ def _read_file(path: str):
     except FileNotFoundError:
         return None
 
-def _write_atomic(path: str, content: str) -> None:
+def _normalize_content_for_write(content):
+    if hasattr(content, "get_data"):
+        try:
+            return content.get_data(as_text=True)
+        except TypeError:
+            return content.get_data().decode("utf-8", errors="replace")
+    if hasattr(content, "text") and isinstance(content.text, str):
+        return content.text
+    if isinstance(content, (bytes, bytearray)):
+        return content.decode("utf-8", errors="replace")
+    if isinstance(content, (dict, list)):
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+def _write_atomic(path: str, content) -> None:
+    text = _normalize_content_for_write(content)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.replace(tmp, path)  # atomic on POSIX
+        f.write(text)
+    os.replace(tmp, path)
 
 # ---- DB helpers -----------------------------------------------------------
 def _fetch_tourlandingpages_json():
@@ -48,7 +74,7 @@ def _fetch_tourlandingpages_json():
         try:
             cur.execute(f"SET SESSION group_concat_max_len = {GROUP_CONCAT_MAX_LEN};")
             cur.execute("SELECT page_json FROM vw_tour_landing_page_json;")
-            rows = cur.fetchall()   # rows -> list of tuples like [ (json1,), (json2,), ... ]
+            rows = cur.fetchall()  
         finally:
             cur.close()
 
@@ -100,67 +126,223 @@ def get_tourlandingpages_version():
     finally:
         cur.close()
 
+# ---- Redis helpers (non-breaking; tolerant) -------------------------------
+def _safe_decode(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode("utf-8")
+        except Exception:
+            return v.decode("utf-8", errors="replace")
+    return v
+
+def _redis_get_json_and_ver():
+    try:
+        json_data = redis_client.get(REDIS_KEY_JSON)
+        ver_data = redis_client.get(REDIS_KEY_VER)
+        if json_data is None or ver_data is None:
+            return None, None
+        return _safe_decode(json_data), _safe_decode(ver_data).strip()
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis get error: {e}")
+        return None, None
+
+def _redis_set_json_and_ver(json_data, ver):
+    try:
+        # store string payloads
+        redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
+        redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
+        current_app.logger.info(f"[tourlandingpages] Redis cache updated ver={ver}")
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis set error: {e}")
+
+def _redis_delete():
+    try:
+        redis_client.delete(REDIS_KEY_JSON, REDIS_KEY_VER)
+        current_app.logger.info("[tourlandingpages] Redis keys deleted")
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis delete error: {e}")
+
 #NEED TO CHANGE REFRESH LOGIC
+# ---- Probe: lightweight endpoint to check if client should refresh -----
+# In-memory small cache for backend version to avoid DB hit on every probe
+_VER_CACHE = {"ver": None, "fetched_at_ms": 0}
+VER_CACHE_TTL_MS = 500  # tweakable: how long to reuse the resolved backend version
+
+
+def _get_backend_ver_cached():
+    """Return backend version string or None on error. Caches for VER_CACHE_TTL_MS ms."""
+    now_ms = int(time.time() * 1000)
+    if _VER_CACHE["ver"] is not None and (now_ms - _VER_CACHE["fetched_at_ms"] < VER_CACHE_TTL_MS):
+        return _VER_CACHE["ver"]
+    
+    try:
+        ver_db = get_tourlandingpages_version()
+        token = get_tourlandingpages_token()
+        backend_ver = (ver_db or token or "").strip()
+        backend_ver = backend_ver if backend_ver != "" else None
+
+        _VER_CACHE["ver"] = backend_ver
+        _VER_CACHE["fetched_at_ms"] = now_ms
+        return backend_ver
+    except Exception:
+        current_app.logger.exception("Failed to read backend version/token for probe")
+        # Invalidate cache so next probe will try again
+        _VER_CACHE["ver"] = None
+        _VER_CACHE["fetched_at_ms"] = 0
+        return None
+
+
+@bp_tourlandingpages.route("/tourlandingpages-probe", methods=["GET"])
+def probe_tourlandingpages():
+    """
+    Lightweight probe endpoint.
+    Query param: ?ver=<client_version>
+    Returns plain text '0' (no update) or '1' (update needed).
+    If server cannot determine backend version, respond '1' (conservative).
+    Response headers: Content-Type text/plain, Cache-Control no-store.
+    """
+    
+    client_ver = (request.args.get("ver") or "").strip()
+    current_app.logger.debug("Probe called, client_ver=%r", client_ver)
+
+    backend_ver = _get_backend_ver_cached()
+
+    redis_ver = _redis_get_json_and_ver()
+
+    # If client has no ver or ver mismatches backend -> tell client to update (1)
+    if backend_ver != redis_ver[1]:
+        current_app.logger.debug("Probe result: backend_ver=%r update_needed=1", backend_ver)
+        _redis_set_json_and_ver("", backend_ver)  # store ver only
+        return ("1", 200, {"X-Redis-TTL": str(redis_ver[1])})
+
+    current_app.logger.debug("Probe result: backend_ver=%r update_needed=0", backend_ver)
+    return ("0", 200, {"X-Redis-TTL": str(redis_ver[1])})
+
+
+###########
+
 @bp_tourlandingpages.route("/tour-landing", methods=["GET"])
 def get_tourlandingpages():
+    """
+    Return tour landing pages JSON.
+    Supports:
+      - Force refresh via ?refresh_key=<TOURWISE_FORCE_KEY>
+      - Redis-first caching
+      - File cache fallback
+      - ETag handling for 304 responses
+    """
+    
+    
     current_app.logger.info("➡️ Entered /tourlandingpages route")
-    force = request.args.get("refresh") in ("1", "true", "True") #need to change this to dynamic approach encrypte 
-                                                                 #encrypted keyword = encrypted value "s8d7f6asd87f = 8s6df8sd"
-    inm = request.headers.get("If-None-Match")
-    current_app.logger.info(f"Query params: force={force}, If-None-Match={inm}")
 
-    # Default: no file cache unless configured
-    cached_json = None
-    cached_ver = None
-    if CACHE_FILE:
-        current_app.logger.info(f"Using CACHE_FILE={CACHE_FILE}")
-        cached_json = _read_file(CACHE_FILE)
-        cached_ver_raw = _read_file(CACHE_FILE + ".ver")
-        cached_ver = cached_ver_raw.strip() if cached_ver_raw else None
-        current_app.logger.info(f"Loaded cache: cached_ver={cached_ver}, cached_json_len={len(cached_json) if cached_json else 0}")
-    else:
-        current_app.logger.info("No CACHE_FILE configured, skipping file cache")
+    # ---- Force refresh check via secret key ----
+    force_key = request.args.get("refresh_key")
+    force = force_key == os.getenv("TOURWISE_FORCE_KEY")
+    # ---- Normalize If-None-Match header ----
+    inm_raw = request.headers.get("If-None-Match") or ""
+    update_needed = request.headers.get("If-Update-Needed") or ""
+    inm = inm_raw.strip().strip('"')
+    current_app.logger.info(f"Query params: force={force}, If-None-Match={inm_raw} -> normalized: {inm}")
+    #===> must check if cache json is existing, if not ignore redis and write json file first 
+    # ---- Try Redis first (shared/global cache) ----
+    if inm:
+        redis_json, redis_ver = _redis_get_json_and_ver()
+        if redis_json and redis_ver:
+            # Normalize Redis version (strip quotes, whitespace, newlines)
+            redis_ver_norm = redis_ver.strip().strip('"').strip()
+            current_app.logger.info(f"[tourlandingpages] Redis cache hit ver={redis_ver_norm}")
 
-    with mysql.connector.connect(**tours_db_config) as conn:
-        ver_db = get_tourlandingpages_version()
-        token  = get_tourlandingpages_token() 
-        ver = (ver_db or token or "").strip()   # <- normalize
-        current_app.logger.info(f"DB version resolved (normalized): {repr(ver)}")
-        
-        print("VERSION",ver,flush=True)
-        print("INM",inm,flush=True)
+            redis_ttl = redis_client.ttl(REDIS_KEY_VER)
 
-        if not force and inm and inm == ver:
-            current_app.logger.info("ETag match → returning 304 Not Modified")
-            return ("", 304, {"ETag": ver})
+            # Debug check: log comparison
+            current_app.logger.info(f"Comparing client ETag force = {force} inm = {repr(inm)} vs Redis ETag {repr(redis_ver_norm)}")
+            # Compare
+            if not force and inm and inm == redis_ver_norm:
+                current_app.logger.info("[tourlandingpages] Redis ETag match -> 304 Not Modified")
+                # **Important:** use quotes in returned ETag (HTTP spec)
+                return (
+                    "",  # body
+                    304,  # status code
+                    {
+                        "ETag": f'"{redis_ver_norm}"',
+                        "X-Redis-TTL": str(redis_ttl)
+                    }  # headers
+                )
 
-        if not force and cached_json and cached_ver == ver:
-            current_app.logger.info("Cache hit → returning cached JSON")
-            return (cached_json, 200, {
+
+            # Cache hit but client ETag mismatch or force refresh
+            headers = {
                 "Content-Type": "application/json; charset=utf-8",
-                "ETag": ver
-            })
+                "ETag": f'"{redis_ver}"',       # frontend can get the version
+                "X-Redis-TTL": str(redis_ttl)   # frontend can get remaining TTL
+            }
+            return (redis_json, 200, headers)
 
-        current_app.logger.info("Cache miss or forced refresh → fetching fresh JSON from DB")
-        
-        fresh_json = _fetch_tourlandingpages_json()
+        # return (redis_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": f'"{redis_ver_norm}"'})
 
+    # ---- File cache fallback ----
+    cached_json, cached_ver = None, None
+    if os.path.exists(CACHE_FILE):
+        current_app.logger.info("File Exists")    
+        if CACHE_FILE:
+            current_app.logger.info(f"Using CACHE_FILE={CACHE_FILE}")
+            cached_json = _read_file(CACHE_FILE)
+            cached_ver_raw = _read_file(CACHE_FILE + ".ver")
+            cached_ver = cached_ver_raw.strip() if cached_ver_raw else None
+
+    # ---- Fetch backend version/token ----
+    ver_db = get_tourlandingpages_version()
+    token = get_tourlandingpages_token()
+    ver = (ver_db or token or "").strip()
+    current_app.logger.info(f"DB version normalized: {repr(ver)}")
+
+    # ---- 304 check for file cache or fresh fetch ----
+    if not force and inm and inm == ver:
+        current_app.logger.info("ETag match → returning 304 Not Modified")
+        return ("", 304, {"ETag": ver})
+
+    if not force and cached_json and cached_ver == ver:
+        current_app.logger.info("File cache hit → returning cached JSON")
+        return (cached_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
+
+    # ---- Fetch fresh JSON from DB ----
+    current_app.logger.info("Cache miss or force → fetching fresh JSON from DB")
+
+    fresh_json = _fetch_tourlandingpages_json()
+    current_app.logger.info(f"fetched fresh JSON = {fresh_json}")    
+
+    # ---- Optionally clear Redis on force refresh ----
+    if force:
+        try:
+            _redis_delete()
+        except Exception:
+            pass
+            
+    # "X-Redis-TTL": str(redis_ttl)
+    # ---- Write to file cache ----
     if CACHE_FILE:
-        current_app.logger.info(f"Writing fresh JSON + version to cache files -> {CACHE_FILE}")
+        current_app.logger.info(f"Writing fresh JSON + version to file cache -> {CACHE_FILE}")
         try:
             _write_atomic(CACHE_FILE, fresh_json)
-            _write_atomic(CACHE_FILE + ".ver", (ver + "\n")) 
+            _write_atomic(CACHE_FILE + ".ver", ver + "\n")
             st = os.stat(CACHE_FILE)
-            current_app.logger.info(f"Wrote cache OK: size={st.st_size} path={CACHE_FILE}")
+            current_app.logger.info(f"File cache written OK: size={st.st_size}")
         except Exception as e:
-            current_app.logger.exception(f"Failed writing cache: {e}")
+            current_app.logger.exception(f"Failed writing file cache: {e}")
 
+    # ---- Update Redis (best-effort) ----
+    try:
+        _redis_set_json_and_ver(fresh_json, ver)
+    except Exception:
+        pass  # already logged by helper
 
     current_app.logger.info("Returning fresh JSON with ETag")
-    return (fresh_json, 200, {
-        "Content-Type": "application/json; charset=utf-8",
-        "ETag": ver
-    })
+    return (fresh_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
+
+
+#############
 
 
 @bp_tourlandingpages.route("/file", methods=["GET"])
@@ -173,3 +355,4 @@ def get_tourlandingpages_file():
 def get_tourlandingpages_raw():
     fresh = _fetch_tourlandingpages_json()
     return fresh, 200, {"Content-Type": "application/json; charset=utf-8"}
+

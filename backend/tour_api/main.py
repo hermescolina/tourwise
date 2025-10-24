@@ -4,6 +4,9 @@ import secrets
 import json
 import hashlib   
 
+
+# from redis_client import redis_client
+
 from decimal import Decimal, InvalidOperation
 
 from flask import (
@@ -42,6 +45,12 @@ from cache_tourpage import bp_tourpages
 from cache_tour_landing import bp_tourlandingpages
 from cache_touradmin import bp_touradmin
 from cache_tourcards import bp_tourcards
+from cache_tourcardsadmin import bp_tourcardsadmin
+from cache_touritinerary import bp_touritinerary
+from cache_historyculture import bp_history_images
+from test_routes import test_bp
+
+
 
 
 from voucher_routes import send_confirmation_email
@@ -49,6 +58,7 @@ from voucher_routes import send_confirmation_email
 # --- Flask app FIRST ---
 app = Flask(__name__)
 
+print("... env", app.config.get("ENV"),flush=True)
 
 CORS(app,
     resources={r"/api/*": {
@@ -57,11 +67,11 @@ CORS(app,
             "http://127.0.0.1:5173",
             "https://app.tourwise.shop"
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         # ⬇️ keep your existing headers and ADD the two custom ones
         "allow_headers": ["Content-Type", "Authorization", "If-None-Match", "X-Cache-Strategy"],
         # ⬇️ expose ETag so your JS can read res.headers.get('ETag')
-        "expose_headers": ["ETag"],
+        "expose_headers": ["ETag", "X-Redis-TTL"],
     }},
     # optional, only if you use cookies:
     # supports_credentials=True
@@ -690,7 +700,7 @@ def update_tour(slug):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/tours/<slug>/history-image", methods=["POST"])
+@app.route("/api/tours/<slug>/history_image", methods=["POST"])
 def upload_history_image(slug):
     try:
         # db = mysql.connector.connect(**tours_db_config)
@@ -732,37 +742,79 @@ def upload_history_image(slug):
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Patch Delete history images for a tour
+# # ✅ Patch Delete history images for a tour
+# @app.route("/api/history-image/<int:image_id>", methods=["PATCH"])
+# def update_history_image(image_id):
+#     print("UPDATE tour_history_images", flush=True)
+#     caption = request.form.get("caption")
+#     file = request.files.get("image")
+
+#     # conn = mysql.connector.connect(**tours_db_config)
+#     conn = get_db_connection()
+#     cursor = conn.cursor()
+#     print("UPDATE tour_history_images SET caption=%s WHERE id=%s", (caption, image_id),flush=True)
+#     if caption:
+#         cursor.execute(
+#             "UPDATE tour_history_images SET caption=%s WHERE id=%s", (caption, image_id)
+#         )
+
+#     if file:
+#         filename = secure_filename(file.filename)
+#         filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+#         file.save(filepath)
+#         cursor.execute(
+#             "UPDATE tour_history_images SET image_path=%s WHERE id=%s",
+#             (filename, image_id),
+#         )  # ✅ Fix column name here too
+
+#     conn.commit()
+#     cursor.close()
+#     conn.close()
+#     return jsonify({"message": "Image updated successfully"})
+
 @app.route("/api/history-image/<int:image_id>", methods=["PATCH"])
 def update_history_image(image_id):
+    print("🟡 UPDATE tour_history_images called", flush=True)
+
     caption = request.form.get("caption")
     file = request.files.get("image")
 
-    # conn = mysql.connector.connect(**tours_db_config)
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    if caption:
-        cursor.execute(
-            "UPDATE tour_history_images SET caption=%s WHERE id=%s", (caption, image_id)
-        )
+    # 🧠 Log incoming data
+    print(f"→ image_id: {image_id}", flush=True)
+    print(f"→ caption: {caption}", flush=True)
+    print(f"→ file: {file.filename if file else 'None'}", flush=True)
 
+    # 🧩 Update caption if provided
+    if caption:
+        query = "UPDATE tour_history_images SET caption=%s WHERE id=%s"
+        params = (caption, image_id)
+        print(f"📝 Executing: {query} | params={params}", flush=True)
+        cursor.execute(query, params)
+
+    # 🧩 Update file if provided
     if file:
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
         file.save(filepath)
-        cursor.execute(
-            "UPDATE tour_history_images SET image_path=%s WHERE id=%s",
-            (filename, image_id),
-        )  # ✅ Fix column name here too
+        query = "UPDATE tour_history_images SET image_path=%s WHERE id=%s"
+        params = (filename, image_id)
+        print(f"🖼️ Executing: {query} | params={params}", flush=True)
+        cursor.execute(query, params)
 
     conn.commit()
+    print("✅ Commit complete", flush=True)
+
     cursor.close()
     conn.close()
+    print("🔚 Connection closed\n", flush=True)
+
     return jsonify({"message": "Image updated successfully"})
 
 
-@app.route("/api/history-image/<int:image_id>", methods=["DELETE"])
+@app.route("/api/history_image/<int:image_id>", methods=["DELETE"])
 def delete_history_image(image_id):
     # conn = mysql.connector.connect(**tours_db_config)
     conn = get_db_connection()
@@ -774,7 +826,7 @@ def delete_history_image(image_id):
     return jsonify({"message": "Image deleted successfully"})
 
 
-@app.route("/api/history-images/<slug>", methods=["GET"])
+@app.route("/api/history_images/<slug>", methods=["GET"])
 def get_history_images(slug):
     # conn = mysql.connector.connect(**tours_db_config)
     conn = get_db_connection()
@@ -815,6 +867,7 @@ def save_video_embed(slug):
         video_id = request.form.get("video_id")  # ex: i1a5eIxsHgY
         caption = request.form.get("caption", "")
         category = request.form.get("category", "")
+        tour_day = int(request.form.get("day", 0))
 
         print(f"🎬 Received video_id: '{video_id}'")
         print(f"📝 Received caption: '{caption}'")
@@ -840,10 +893,10 @@ def save_video_embed(slug):
             print("💾 Inserting video into tour_videos table...")
             cursor.execute(
                 """
-                INSERT INTO tour_videos (tour_id, video_id, caption, category)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO tour_videos (tour_id, video_id, caption, category, tour_day)
+                VALUES (%s, %s, %s, %s, %s)
             """,
-                (tour_id, video_id, caption, category),
+                (tour_id, video_id, caption, category, tour_day),
             )
             db.commit()
             print("✅ Video inserted successfully.")
@@ -914,7 +967,7 @@ def delete_tour_video(slug, video_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/history-images/<slug>/<int:image_id>", methods=["DELETE"])
+@app.route("/api/history_images/<slug>/<int:image_id>", methods=["DELETE"])
 def delete_history_image_by_slug(slug, image_id):
     # conn = mysql.connector.connect(**tours_db_config)
     conn = get_db_connection()
@@ -940,6 +993,8 @@ def update_tour_video(slug, video_id):
     try:
         caption = request.form.get("caption")
         category = request.form.get("category")
+        tour_day = int(request.form.get("day", 0))
+
         if not caption:
             return jsonify({"error": "Caption is required"}), 400
 
@@ -952,10 +1007,10 @@ def update_tour_video(slug, video_id):
             cursor.execute(
                 """
                 UPDATE tour_videos
-                SET caption = %s, category = %s
+                SET caption = %s, category = %s, tour_day = %s
                 WHERE id = %s
             """,
-                (caption, category, video_id),
+                (caption, category, tour_day, video_id),
             )
 
             db.commit()
@@ -984,7 +1039,7 @@ def list_all_tours():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/tours/<slug>/history-images", methods=["GET"])
+@app.route("/api/tours/<slug>/history_images", methods=["GET"])
 def get_tour_history_images(slug):
     try:
         # db = mysql.connector.connect(**tours_db_config)
@@ -1143,6 +1198,7 @@ def get_tour_titles():
 
 @app.route("/api/tour-itinerary/<string:slug>", methods=["GET"])
 def get_tour_itinerary(slug):
+    print("testing", flush=True)
     tour = get_tour_from_db_by_slug(slug)  # You need to fetch using slug
     return jsonify(tour)
 
@@ -1253,6 +1309,12 @@ app.register_blueprint(bp_tourpages, url_prefix="/api/tp")
 app.register_blueprint(bp_tourlandingpages, url_prefix="/api/tl")
 app.register_blueprint(bp_touradmin, url_prefix="/api/ta")
 app.register_blueprint(bp_tourcards, url_prefix="/api/tc")
+app.register_blueprint(bp_tourcardsadmin, url_prefix="/api/tca")
+app.register_blueprint(bp_touritinerary, url_prefix="/api/ti")
+app.register_blueprint(bp_history_images, url_prefix="/api/th")
+app.register_blueprint(test_bp, url_prefix="/api/tred")
+
+
 
 
 

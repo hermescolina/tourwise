@@ -1,5 +1,4 @@
 // components/TourItinerary.jsx
-import React from 'react';
 import styles from './TourItinerary.module.css'; // optional CSS module
 
 export default function TourItinerary({ itineraries = [] }) {

@@ -25,31 +25,22 @@ export default function UploadMedia() {
     const [videoEditCaption, setVideoEditCaption] = useState('');
     const [videoEditCategory, setVideoEditCategory] = useState('Tour Videos');
     const [editCategory, setEditCategory] = useState('');
-
-
-
-
+    const [videoDay, setVideoDay] = useState('');
+    const [videoEditDay, setVideoEditDay] = useState('');
 
 
     useEffect(() => {
-        fetch(`${apiBaseTour}/api/tours/${slug}`)
+        fetch(`${apiBaseTour}/api/th/history_images-data/${slug}`)
             .then(res => res.ok ? res.json() : Promise.reject('Tour not found'))
-            .then(data => setTour(data))
+            .then(data => {
+                setTour(data)
+                setVideos(data.videos)
+                setHistoryImages(data.history_images)
+            })
             .catch(err => {
                 console.error(err);
                 setError('Tour not found or server error.');
             });
-
-        fetch(`${apiBaseTour}/api/history-images/${slug}`)
-            .then(res => res.json())
-            .then(data => setHistoryImages(data))
-            .catch(console.error);
-
-        // ✅ Just get the uploaded videos (no POST here)
-        fetch(`${apiBaseTour}/api/tours/${slug}/videos`)
-            .then(res => res.json())
-            .then(data => setVideos(data))
-            .catch(console.error);
     }, [slug]);
 
     const handleCategoryChange = (e) => setCategory(e.target.value);
@@ -126,9 +117,11 @@ export default function UploadMedia() {
         });
 
         if (!res.ok) return alert("Update failed");
+        window.location.reload();
 
-        const updated = await fetch(`${apiBaseTour}/api/history-images/${slug}`).then(r => r.json());
-        setHistoryImages(updated);
+        const selected = formData.get("category");
+        console.log("222. selected category", category)
+        setCategory(selected)
 
         setEditMode(null);
         setEditCaption('');
@@ -155,12 +148,14 @@ export default function UploadMedia() {
     const handleVideoEditSubmit = async (id) => {
         const formData = new FormData();
         formData.append("caption", videoEditCaption);
-        formData.append("category", videoEditCategory); // <- make sure this exists
+        formData.append("category", videoEditCategory);
+        formData.append("day", videoEditDay);
 
         // ✅ Debug logs
-        console.log("Sending update for video ID:", id);
-        console.log("caption:", videoEditCaption);
-        console.log("category:", videoEditCategory);
+        console.log("444 Sending update for video ID:", id);
+        console.log("444 caption:", videoEditCaption);
+        console.log("444 category:", videoEditCategory);
+        console.log("444 day:", videoEditDay);
         for (let [key, value] of formData.entries()) {
             console.log(`${key}:`, value);
         }
@@ -196,6 +191,7 @@ export default function UploadMedia() {
         const formData = new FormData();
         formData.append("video_id", videoId);
         formData.append("caption", videoCaption);
+        formData.append("day", videoDay);
         formData.append("category", videoCategory);
 
         const res = await fetch(`${apiBaseTour}/api/tours/${slug}/save-video`, {
@@ -217,21 +213,20 @@ export default function UploadMedia() {
     };
 
     const imagePath = tour?.image || '';
-    const imageUrl = imagePath.startsWith('/uploads/images/')
-        ? `${frontendBase}${imagePath.replace('/uploads', '')}`
-        : `${apiBaseTour}${imagePath.startsWith('/') ? '' : '/'}${imagePath}`;
+    const imageUrl = imagePath.startsWith('/images/')
+        ? `${frontendBase}/tourism-analytics/${imagePath}`
+        : `${apiBaseTour}/uploads/${imagePath}`;
 
-    console.log("Image URL:", imageUrl);
+    const filteredImages = Array.isArray(historyImages)
+    ? (category ? historyImages.filter(img => img.category === category) : historyImages)
+    : [];
 
-    console.log("imagePath:", imagePath);
-
-    const filteredImages = category ? historyImages.filter(img => img.category === category) : historyImages;
 
     const videoCategories = [
         { label: 'About the Tour', value: 'About the Tour' },
         { label: 'Tour Videos', value: 'Tour Videos' },
         { label: 'History and Culture', value: 'History and Culture' },
-        { label: 'Header Background Video', value: 'backgroundvideo' },
+        // { label: 'Header Background Video', value: 'backgroundvideo' },
     ];
 
 
@@ -273,6 +268,27 @@ export default function UploadMedia() {
                         />
                     </label>
                     <br />
+
+                     {/* ✅ Day Selector */}
+                    <label>
+                        Day:
+                        <select
+                            value={videoDay}
+                            onChange={(e) => setVideoDay(e.target.value)}
+                            style={{ width: '100%', marginTop: '4px' }}
+                        >
+                            <option value="">Select day</option>
+                            <option value="1">Day 1</option>
+                            <option value="2">Day 2</option>
+                            <option value="2">Day 3</option>
+                            <option value="2">Day 4</option>
+                            <option value="2">Day 5</option>
+                            <option value="2">Day 6</option>
+                            <option value="2">Day 7</option>
+                            <option value="2">Day 8</option>
+                        </select>
+                    </label>
+                    <br /><br />
                     <button type="submit" className={styles.actionButton}>
                         Upload Video
                     </button>
@@ -355,7 +371,8 @@ export default function UploadMedia() {
                 {filteredImages.map(img => (
                     <div key={img.id} className={styles.imageCard}>
                         <img
-                            src={`${apiBaseTour}/uploads/${img.filename}`}
+                            
+                            src={`${apiBaseTour}/uploads/${img.image_path}`}
                             alt={img.caption}
                             className={styles.previewImage}
                         />
@@ -368,9 +385,10 @@ export default function UploadMedia() {
                                 />
 
                                 <textarea
-                                    rows={2}
+                                    rows={5}
                                     value={editCaption}
                                     onChange={(e) => setEditCaption(e.target.value)}
+                                     style={{width: "90%"}}
                                 />
 
                                 <select
@@ -380,7 +398,7 @@ export default function UploadMedia() {
                                     <option value="About the Tour">About the Tour</option>
                                     <option value="Tour Videos">Tour Videos</option>
                                     <option value="History and Culture">History and Culture</option>
-                                    <option value="Header Background Video">Header Background Video</option>
+                                    {/* <option value="Header Background Video">Header Background Video</option> */}
                                 </select>
 
                                 <button onClick={handleEditSubmit}>Save</button>
@@ -424,14 +442,16 @@ export default function UploadMedia() {
                                     }}
                                     style={{ width: '100%', marginTop: '0.5rem' }}
                                 />
+    
                                 <select
-                                    value={videoEditCategory}
-                                    onChange={(e) => setVideoEditCategory(e.target.value)}
+                                    value={videoEditDay}
+                                    onChange={(e) => setVideoEditDay(e.target.value)}
                                     style={{ marginTop: '0.5rem', display: 'block' }}
                                 >
-                                    {videoCategories.map(opt => (
-                                        <option key={opt.value} value={opt.value}>
-                                            {opt.label}
+                                    <option value="">Select Tour Day</option>
+                                    {Array.from({ length: 10 }, (_, i) => (
+                                        <option key={i + 1} value={i + 1}>
+                                            Day {i + 1}
                                         </option>
                                     ))}
                                 </select>
@@ -445,13 +465,16 @@ export default function UploadMedia() {
                             </>
                         ) : (
                             <>
+                                {/* {console.log("111 video.tourday", video?.tour_day)} */}
                                 <p>{video.caption}</p>
+                                <p>Day {video.tour_day}</p>
                                 <p><strong>Category:</strong> {video.category}</p>
 
                                 <button onClick={() => handleVideoDelete(video.id)}>Delete</button>
                                 <button onClick={() => {
                                     setVideoEditMode(video.id);
                                     setVideoEditCaption(video.caption);
+                                    setVideoEditDay(video.tour_day)
                                 }}>Edit</button>
                             </>
                         )}
