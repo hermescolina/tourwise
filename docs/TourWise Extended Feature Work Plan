@@ -1,0 +1,279 @@
+# 🧭 TourWise Extended Feature Work Plan
+*(Payment Options, DIY Tours, and Transport Integration)*
+
+---
+
+## **PHASE 1: Payment System Framework**
+**Goal:** Enable multiple vendor payment options with transparency and accountability.
+
+### Tasks
+- Add new fields in database:
+  - `payment_mode` (`tourwise_managed`, `direct_to_vendor`, `pay_later`, `payment_on_delivery`)
+  - `payment_rules` (text/JSON for refund policy, rules, etc.)
+  - `security_deposit_status` (if payment on delivery)
+- Update API to return payment mode and rules to frontend.
+- Display payment mode badges on **tour cards**, e.g.:
+  - 🟢 “TourWise Managed Payment – 100% Money-Back Guarantee”
+  - 🟡 “Direct Payment to Vendor – See Vendor Rules”
+  - 🔵 “Pay Later Available – via Partner”
+  - 🟠 “Payment on Delivery – Vendor Must Have Security Deposit”
+- Always show disclaimer if not TourWise-managed.
+- Integrate **Xendit API** for TourWise-managed payments.
+- Log all transactions (direct/vendor-based).
+
+---
+
+## **PHASE 2: DIY Tour & Location-Based Pricing**
+**Goal:** Allow users to customize their trip by selecting specific locations.
+
+### Tasks
+- Add `locations` table linked to tours:
+  - `location_id`, `tour_id`, `name`, `price`, `has_transport_option`
+- Support `DIY available` flag in tours.
+- Create “Build Your Own Tour” interface:
+  - Users select locations and view running total.
+- Create API endpoints:
+  - `/api/tour/{id}/locations`
+  - `/api/build-diy-tour`
+
+---
+
+## **PHASE 3: Per-Location Transport Integration**
+**Goal:** Let users attach transportation per location or entire tour.
+
+### Tasks
+- Add `transport_partners` table:
+  - `id`, `name`, `vehicle_type`, `availability`, `pricing`, `verified_status`
+- Link transport to locations for optional connection.
+- On DIY page:
+  - Allow “Add Transport” per segment.
+  - Option to “Use TourWise Partner Car for Entire Trip”.
+- Log all transport-related transactions in `transport_logs`.
+- Provide admin-level **TourWise Managed Reports**.
+
+---
+
+## **PHASE 4: QR Code & Verification Flow**
+**Goal:** Track transport handoffs and verify trip completions.
+
+### Tasks
+- Generate unique **QR codes** for each trip or segment.
+- Display QR in:
+  - Driver/Tour Guide mobile view
+  - User itinerary dashboard
+- Allow scanning for pickup/dropoff confirmation.
+- Log scan data: timestamp, driver, user, location.
+- Display confirmation and status tracking in Admin Reports.
+
+---
+
+## **PHASE 5: Trust & Compliance Layer**
+**Goal:** Ensure transparency, confidence, and accountability.
+
+### Tasks
+- Always display disclaimer if not TourWise-managed.
+- Require vendor-defined:
+  - Refund rules
+  - Payment handling instructions
+  - Contact details for disputes
+- Enforce **security deposit** for vendors using “Payment on Delivery”.
+- Show **Secured Vendor** badge for compliant vendors.
+- Create **Admin Reporting Dashboard** for:
+  - Vendor deposit tracking
+  - Transport logs
+  - DIY analytics
+  - Payment mode monitoring
+
+---
+
+## **PHASE 6: Future Extensions**
+**Goal:** Expand and enhance system capabilities.
+
+### Tasks
+- AI-driven trip recommendations based on DIY patterns.
+- Integration with real-time national transport APIs.
+- Add **Pay Later credit** partner integration.
+- Develop **mobile app** for drivers/guides with QR scanning.
+
+---
+
+### ✅ Summary
+This roadmap establishes:
+- Transparent payment options.
+- Flexible DIY tours.
+- Traceable per-location transport.
+- Strong vendor accountability and trust layer.
+- Scalable architecture for future integrations.
+
+
+
+
+
+===================================
+
+
+
+
+Excellent 👌 — you’ve already laid out a **comprehensive multi-mode payment and transport ecosystem** for TourWise.
+Below is a **structured work plan** that captures **everything we discussed**, organized into **phases** for clear execution.
+
+---
+
+## 🧭 **TourWise Extended Feature Work Plan**
+
+*(Payment Options, DIY Tours, and Transport Integration)*
+
+---
+
+### **PHASE 1: Payment System Framework**
+
+**Goal:** Enable multiple vendor payment options with transparency and accountability.
+
+#### 1.1 Database & API Setup
+
+* Add new columns to `tours` or `vendors` tables:
+
+  * `payment_mode` (`tourwise_managed`, `direct_to_vendor`, `pay_later`, `payment_on_delivery`)
+  * `payment_rules` (text or JSON for refund policy, rules, etc.)
+  * `security_deposit_status` (if payment on delivery)
+* Update API endpoints to return payment mode and rules to frontend.
+
+#### 1.2 Frontend Integration (Tour Cards & Tour Pages)
+
+* Display payment mode in the **tour cards** (e.g. badge or label).
+
+  * Example labels:
+
+    * 🟢 “TourWise Managed Payment – 100% Money-Back Guarantee”
+    * 🟡 “Direct Payment to Vendor – See Vendor Rules”
+    * 🔵 “Pay Later Available – via Partner”
+    * 🟠 “Payment on Delivery – Vendor Must Have Security Deposit”
+* Add “More Info” or “Payment Rules” button showing vendor payment policy.
+* Always display a **disclaimer note** if not TourWise-managed.
+
+#### 1.3 Backend Logic (Financial Flow)
+
+* If **TourWise Managed** → Use Xendit API for split payment.
+* If **Direct Payment** → No processing by TourWise, only log transaction.
+* If **Pay Later** → Integrate partner credit APIs (future).
+* If **Payment on Delivery** → Require vendor security deposit record.
+
+---
+
+### **PHASE 2: DIY Tour & Location-Based Pricing**
+
+**Goal:** Allow users to customize their trip by selecting specific locations.
+
+#### 2.1 Data Model
+
+* Add `locations` table linked to tours:
+
+  * `location_id`, `tour_id`, `name`, `price`, `has_transport_option`
+* Support “DIY available” flag per tour.
+
+#### 2.2 User Interface
+
+* Add **“DIY Available”** badge on cards.
+* On tour page → “Build Your Own Tour” section:
+
+  * List available locations and prices.
+  * Allow users to add/remove destinations dynamically.
+  * Display running total.
+
+#### 2.3 API Updates
+
+* Endpoint: `/api/tour/{id}/locations`
+* Endpoint: `/api/build-diy-tour` (for calculating totals)
+
+---
+
+### **PHASE 3: Per-Location Transport Integration**
+
+**Goal:** Let users attach transportation per location or segment.
+
+#### 3.1 Transport Partner Data
+
+* Add `transport_partners` table:
+
+  * `id`, `name`, `vehicle_type`, `availability`, `pricing`, `verified_status`
+* Link to `locations` for optional connection.
+
+#### 3.2 Selection Flow
+
+* On DIY page:
+
+  * “Add Transport” → choose from available partner cars.
+  * Show estimated transfer price.
+  * Option to “Use TourWise Partner Car for Entire Trip”.
+
+#### 3.3 Logging and Reports
+
+* Each booked transport logs:
+
+  * Trip ID, driver ID, timestamp, pickup/dropoff, payment.
+* Stored in `transport_logs` table and displayed in TourWise Admin Reports.
+
+---
+
+### **PHASE 4: QR Code & Verification Flow**
+
+**Goal:** Track transport handoffs and verify trip completions.
+
+#### 4.1 QR Code Generation
+
+* Each segment (or trip) generates a unique QR code:
+
+  * Linked to `trip_id` + `transport_id`.
+* Shown in:
+
+  * Driver/Tour Guide mobile view
+  * User itinerary view
+
+#### 4.2 Scanning & Confirmation
+
+* Driver or guide scans QR code (or enters trip code).
+* API updates `status = confirmed_pickup` or `confirmed_dropoff`.
+
+#### 4.3 Data Logging
+
+* Store scan data (time, location, user, driver).
+* Sync with TourWise reporting dashboard for transparency.
+
+---
+
+### **PHASE 5: Trust & Compliance Layer**
+
+**Goal:** Ensure transparency, confidence, and system-wide accountability.
+
+#### 5.1 Disclaimers & User Trust
+
+* Always show disclaimer if payment is not TourWise-managed.
+* Vendor must define:
+
+  * Refund rules
+  * Payment handling instructions
+  * Contact details for disputes
+
+#### 5.2 Vendor Security Deposit
+
+* Payment on Delivery vendors must deposit fixed amount.
+* Display vendor’s **“Secured Vendor”** badge if deposit confirmed.
+
+#### 5.3 Reporting Dashboard
+
+* Admin view for:
+
+  * Vendor deposit tracking
+  * Transport logs
+  * DIY build analytics
+  * Payment mode distribution
+
+---
+
+### **PHASE 6: Future Extensions**
+
+* ✳️ AI-based trip recommendations using DIY data.
+* ✳️ Integration with national transport APIs (for real-time availability).
+* ✳️ Partner credit system for “Pay Later” option.
+* ✳️ Mobile app for drivers/guides for QR logging and check-in.
+
