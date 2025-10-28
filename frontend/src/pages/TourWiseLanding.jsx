@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiBaseTour, frontendBase } from '../config';
 import styles from './TourWiseLanding.module.css';
 import { useNavigate, useLocation, useParams,  useSearchParams} from 'react-router-dom';
@@ -37,6 +37,7 @@ const parseTTLms = (strategy) => {
 function cacheGet(key) {
   try {
     const raw = localStorage.getItem(key);
+    
     if (!raw) return null;
 
     const obj = JSON.parse(raw);
@@ -56,14 +57,12 @@ function cacheGet(key) {
     if (remaining > 24 * 60 * 60 * 1000) { // greater than 24 hours
       console.warn(`cacheGet: ${key} expires far in future (${(remaining/3600000).toFixed(2)}h). Possible stale write?`, { expires: expiresNum, now });
     }
-
     // expired -> treat as not found
     if (expiresNum < now) return null;
-
+    
     // normalize back into the object so callers see numbers
     obj.expires = expiresNum;
     if (!Number.isNaN(fetchedAtNum)) obj.fetchedAt = fetchedAtNum;
-
     // debug lines you had
     return obj; // { data, etag, expires, fetchedAt? }
   } catch (e) {
@@ -75,15 +74,14 @@ function cacheGet(key) {
 
 // ✨ CACHE: write to localStorage with TTL and fetchedAt guard
 function cacheSet(key, { data, etag = null, ttl = CACHE_TTL_MS, fetchedAt = null }) {
-  const now = nowMs();
-  const incomingFetchedAt = fetchedAt ? Number(fetchedAt) : now;
-  const payload = {
-    data,
-    etag,
-    fetchedAt: incomingFetchedAt,
-    expires: now + Math.max(0, ttl),
-  };
-
+    const now = nowMs();
+    const incomingFetchedAt = fetchedAt ? Number(fetchedAt) : now;
+    const payload = {
+        data,
+        etag,
+        fetchedAt: incomingFetchedAt,
+        expires: now + Math.max(0, ttl),
+    };
 
   try {
     const rawExisting = localStorage.getItem(key);
@@ -155,6 +153,7 @@ async function probeBackend(ver) {
     const text = (await res.text()).trim();
 
     const returnedRedisTTL = res.headers.get("X-Redis-TTL");
+    console.log("returnedRedisTTL", returnedRedisTTL)
     return [text, returnedRedisTTL];
 
     // return text;
@@ -200,7 +199,9 @@ export default function TourWiseLanding() {
     const [currencyList, setCurrencyList] = useState({});
     const location = useLocation();
     const [searchParams] = useSearchParams();
-
+    const currentControllerRef = useRef(null);
+    const currentReqIdRef = useRef(0);
+    const inFlightRef = useRef(false);
 
 
     useEffect(() => {
@@ -340,22 +341,21 @@ export default function TourWiseLanding() {
     // ✅ UNIFIED DATA FETCHING `useEffect` (This is the core fix)
     // ========================================================================
 
-    let currentReqId = 0;
-    let currentController = null;
-    const inFlightProbes = new Map();  // key -> Promise
+    // const inFlightProbes = new Map();  // key -> Promise
         
     const fetchWithStrategy = async () => {
-        const reqId = ++currentReqId;
+        const reqId = ++currentReqIdRef.current;
         let update_flag = 0;
+        let updateNeeded = 0;
+        let stoppedEarly = false;
         
-        if (currentController) {
-            try { currentController.abort(); } catch (_) {}
+        if (currentControllerRef) {
+            try { currentControllerRef.abort(); } catch (_) {}
         }
         
         const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
             if (!cachedData) return;
-            setItems(cachedData.data || []);
-
+                setItems(cachedData.data || []);
             if (cachedData.data?.title) {
                 document.title = `TourWise | ${cachedData.data.title}`;
             }
@@ -364,69 +364,79 @@ export default function TourWiseLanding() {
         const strategy = searchParams.get('strategy');
         const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
         const ttl = parseTTLms(finalSTR);
-
+        console.log("Date.now() < cachedEntry?.expires", Date.now() < cachedEntry?.expires)
         // Only consider cache-based short-circuit when TTL valid
+        const clientVer = cachedEntry?.etag ?? "";
+        const probePromise = (async () => {
+                try {
+                    updateNeeded = await probeBackend(clientVer);        
+                    return updateNeeded;
+                } catch (err) {
+                    console.log("error on probe backend", err)
+                }
+            })();
+
+        updateNeeded = await probePromise;
+        
+        console.log("updateNeeded ver", updateNeeded[1],updateNeeded[0])
+        
+        console.log("check 1")
         if (
             ttl > 0 &&
             cachedEntry &&
             typeof cachedEntry?.expires === 'number' &&
             Date.now() < cachedEntry?.expires
         ) {
-            const clientVer = cachedEntry?.etag ?? "";
-            const now = Date.now();
             
-            const probePromise = (async () => {
-                try {
-                    // const updateNeeded = await probeBackend(clientVer); //1234
-                    const updateNeeded = await probeBackend(clientVer);
-
-                    // const updateNeeded = await probeBackend(clientVer);
+            const now = Date.now();
+             try {
                     if (updateNeeded[0] === "0") {
+                        // console.log("probe says no update — use cache",cachedEntry);
                         console.log("probe says no update — use cache");
                         skipFetchUseCache(cachedEntry, ttl, updateNeeded[1], setItems);
                         return { stoppedEarly: true };
-                    } else {update_flag = 1; }
-
+                    }
                     // probe indicates update needed; caller will continue to actual fetch afterwards
                     console.log("probe says updateNeeded, proceed to network fetch");
-                    return { stoppedEarly: false };
                 } catch (err) {
                     console.error("probeBackend error:", err);
-                    // Allow retry later by removing nextAllowed marker
                     _lastProbeAt.delete(key);
-                    // throw err;
                     return { stoppedEarly: false }; // continue to actual fetch
                 } finally {
                 }
-            })();
-            
-            // save the promise so concurrent calls won't start a second probe
-            const { stoppedEarly } = await probePromise;
+        }
         if (stoppedEarly) {
-            return; // skip network fetch
-        }
-        }
-
+                return; // skip network fetch
+            }
+        console.log("check 2")
         // ---- actual network fetch (runs only if TTL invalid or probe decided updateNeeded) ----
         const headers = {};
         
-        if (cachedEntry?.etag && update_flag === 0) {
+        console.log("cachedEntry.etag",cachedEntry?.etag);
+        if (cachedEntry?.etag && updateNeeded[0] === 0) {
             headers['If-None-Match'] = cachedEntry.etag;
+            headers['If-Update-Needed'] = updateNeeded[0];
             console.log("→ Sending If-None-Match:", headers['If-None-Match']);
         }
-        
-        currentController = new AbortController();
-        const signal = currentController.signal;
+
+        console.log("check after header", updateNeeded[0]);
+
+        const controller = new AbortController();
+        currentControllerRef.current = controller;
+        const signal = controller.signal;
+        inFlightRef.current = true;
         
         try {
+            console.log("check 3", signal)
             const res = await fetch(`${apiBaseTour}/api/tl/tour-landing`, { headers, signal });
+            console.log("check 3.1")
             // stale-response guard 1234
-            if (reqId !== currentReqId && update_flag === 0) { 
-                console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
+             if (reqId !== currentReqIdRef.current && updateNeeded[0] === 0) {
+                console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId: currentReqIdRef.current });
                 return;
             }
-
-            if (res.status === 304 && cachedEntry?.data) {
+            console.log("check 3", res.status)
+            if (res.status === 304 && cachedEntry?.data && updateNeeded[0] === 0) {
                 console.log("♻️ Using cached data, ETag matched:", cachedEntry.etag);
                 setItems(cachedEntry.data || []);
                 return;
@@ -435,24 +445,22 @@ export default function TourWiseLanding() {
                 console.error('fetchWithStrategy: non-ok response', res.status);
                 return;
             }
-
+            
             let data;
             try {
                 data = await res.json();
-                
             } catch (error) {
                 console.error('❌ Failed to parse data:', error);
                 return;
             }
             
             const etag = res.headers.get('ETag') || null;
-            const redisTtl = res.headers.get('X-Redis-TTL');
             
-            cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
-
-    
-            if (reqId === currentReqId || update_flag === 1) {
+            if (reqId < currentReqIdRef.current || updateNeeded[0] === 1) {
+                console.log("check fresh", reqId, currentReqIdRef.current, updateNeeded[0])
+                cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
                 setItems(data || []);
+                console.count("set fresh json")
             } else {
                 console.warn('fetchWithStrategy: response arrived but request is stale, ignoring setItems');
             }
@@ -465,7 +473,6 @@ export default function TourWiseLanding() {
             }
         }
       };
-
 
     useEffect(() => {
         fetchWithStrategy();
@@ -537,6 +544,7 @@ export default function TourWiseLanding() {
         );
     };
 
+    
     // ✅ Show loading or empty state
     if (!items) {
         return <p>Loading data...</p>; // API still fetching
@@ -545,7 +553,70 @@ export default function TourWiseLanding() {
         return <p>No data available.</p>; // API returned no items
     }
 
+    // Add this helper anywhere near the top of your component file
+    
+    let parsed = [];
+    let normalizedItems = [];
+    function tryParse(value) {
+        if (value === null || value === undefined) return null;
+
+        // If already an object, return as-is
+        if (typeof value === "object") return value;
+
+        // If not a string, ignore
+        if (typeof value !== "string") return null;
+
+        try {
+            return JSON.parse(value);
+        } catch (err) {
+            console.warn("❌ Failed to parse JSON:", err.message, "\nValue:", value.slice(0, 200));
+            return null;
+        }
+    }
+    console.log("items",items)
     return (
+        <>
+        {   
+            (() => {
+                // Step 1: Parse each item safely
+                
+                if (Array.isArray(items)) {
+                    try {
+                        parsed = items
+                            .map(item => {
+                                try {
+                                return tryParse(item);
+                                } catch (err) {
+                                console.error("Failed to parse item:", item, err);
+                                return null;
+                                }
+                            })
+                            .filter(Boolean);
+
+                } catch (outerErr) {
+                    console.error("Unexpected error while parsing items:", outerErr);
+                    parsed = [];
+                }
+
+                } else {
+                parsed = tryParse(items) ? [tryParse(items)] : [];
+                }
+
+
+                // Step 2: Normalize the parsed data
+
+                normalizedItems = Array.isArray(parsed)
+                    ? parsed
+                        .map(el => (typeof el === "string" ? tryParse(el) : el))
+                        .filter(Boolean)
+                    : [];
+                
+                // Step 3: Filter only tours
+                const tours2 = normalizedItems.filter(it => it?.tour?.type === "tour");
+            })()
+
+            
+        }
         <div className={styles.tourwiseLanding}>
             {showLangBanner && (
                 <div className={styles.languageBanner}>
@@ -579,7 +650,6 @@ export default function TourWiseLanding() {
                     <button onClick={() => setShowLangBanner(false)}>✕</button>
                 </div>
             )}
-
             <Navbar />
             <div className={styles.movingGroup}>
                 <section className={`${styles.hero} ${styles.heroImage1}`}>
@@ -611,32 +681,18 @@ export default function TourWiseLanding() {
             <section className={styles.sectionFeatured}>
                 {/* parse items once and build tours list (move logs out of JSX if you want) */}
                 {(() => {
-                    const parsed = (items || [])
-                    .map(it => {
-                        if (typeof it === "string") {
-                        try {
-                            return JSON.parse(it);
-                        } catch (e) {
-                            console.error("Failed to parse item:", e);
-                            return null;
-                        }
-                        }
-                        return it;
-                    })
-                    .filter(Boolean); // remove nulls
-
-                    const tours = parsed.filter(it => it?.tour?.type === "tour");
-
+                    const tours = normalizedItems.filter(it => it?.tour?.type === "tour");
+                    
                     if (tours.length === 0) return null;
-
+                    
                     return (
                     <>
                         <h2 className={styles.sectionTitle}>Top Destinations</h2>
+                        
                         <div className={styles.tourCards}>
                         {tours.map((it, idx) => {
                             const tour = it.tour || {};
                             const key = tour.item_id ?? tour.id ?? tour.slug ?? idx;
-
                             // safe price formatting
                             let price = '';
                             try {
@@ -677,7 +733,7 @@ export default function TourWiseLanding() {
                 })()}
                 </section>
 
-
+            {/* {console.log("before items hotel section", items)}
             {items
                 .filter(item => item.type === 'hotel') // ✅ Show only hotels
                 .map((hotel, index) => (
@@ -720,7 +776,8 @@ export default function TourWiseLanding() {
                     <p>Experience unforgettable destinations with personalized recommendations.</p>
                     <p>Explore the world in comfort — your perfect trip starts here.</p>
                 </div>
-            </section>
+            </section> */}
         </div >
+        </>
     );
 }
