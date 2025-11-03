@@ -28,20 +28,16 @@ GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 REDIS_KEY_JSON = os.getenv("TOURWISE_REDIS_KEY_JSON", "tourwise:landing:json")
 REDIS_KEY_VER = os.getenv("TOURWISE_REDIS_KEY_VER", "tourwise:landing:json:ver")
 REDIS_TTL = int(os.getenv("TOURWISE_REDIS_TTL", str(60 * 60)))  # default 1 hour
-
-MEM_KEY_JSON = os.getenv("TOURWISE_MEM_KEY_JSON", "tourwise:landing:json")
-MEM_KEY_VER = os.getenv("TOURWISE_MEM_KEY_VER", "tourwise:landing:json:ver")
-
 # Toggle to disable redis entirely (use "false" to disable)
 USE_REDIS = os.getenv("TOURWISE_USE_REDIS", "true").lower() != "false"
 
+MEM_KEY_JSON = os.getenv("TOURWISE_MEM_KEY_JSON", "tourwise:landing:json")
+MEM_KEY_VER = os.getenv("TOURWISE_MEM_KEY_VER", "tourwise:landing:json:ver")
 # ---- Memory cache settings -----------------------------------------------
 # toggle memory cache on/off
 USE_MEMORY_CACHE = os.getenv("TOURWISE_USE_MEMORY_CACHE", "true").lower() != "false"
-
 # TTL in seconds for memory cache entries
 MEMORY_CACHE_TTL = int(os.getenv("TOURWISE_MEMORY_CACHE_TTL", "300"))  # default 5 min
-
 # instantiate memory cache object (singleton)
 memory_cache = memoryCache(default_ttl=MEMORY_CACHE_TTL)
 
@@ -52,6 +48,7 @@ VER_CACHE_TTL_MS = 500  # tweakable: 0.5 sec
 print(f"[tourlandingpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
 print(f"[tourlandingpages] tourlandingpages_CACHE={CACHE_FILE}", flush=True)
 print(f"[tourlandingpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
+print(f"[tourlandingpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
 
 #-------global helpers-------------------------------------------------------
 def _default_headers():
@@ -89,7 +86,6 @@ def write_both(redis_client, redis_key: str, data: Any, ver: str):
     redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
     # redis_client.setex(f"{REDIS_KEY_JSON}:ver", REDIS_TTL, ver)
     redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
-
     # Write to memory cache (as Python object)
     _memory_set(MEM_KEY_JSON, payload, ttl=VER_CACHE_TTL_MS / 1000)
 
@@ -497,7 +493,10 @@ def get_tourlandingpages():
         pass  # already logged by helper
 
     current_app.logger.info("Returning fresh JSON with ETag")
-    return (fresh_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
+    # return (fresh_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
+    fresh_data = json.loads(fresh_json) if isinstance(fresh_json, str) else fresh_json
+    return (fresh_data, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
+
 
 
 #############
