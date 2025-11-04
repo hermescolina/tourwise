@@ -152,10 +152,8 @@ async function probeBackend(ver) {
     }
 
     const text = (await res.text()).trim();
-    console.log("text from probe", text)
-    const returnedRedisTTL = res.headers.get("X-Redis-TTL");
-    console.log("returnedRedisTTL", returnedRedisTTL)
-    return [text, returnedRedisTTL];
+    const returnedHeader = res.headers.get("X-Redis-TTL") || res.headers.get("ETag");
+    return [text, returnedHeader];
 
     // return text;
   } catch (err) {
@@ -349,16 +347,12 @@ export default function TourWiseLanding() {
     const inFlightProbes = new Map();  // key -> Promise
     
     const fetchWithStrategy = async () => {
-        // use `key` consistently
         const reqId = ++currentReqId;
-        let ttl_flag = 0;
-
-        // Cancel previous pending fetch for fetch API (if any)
+        
         if (currentController) {
             try { currentController.abort(); } catch (_) {}
         }
         
-        // 1) Prime UI from cache (fast paint)
         const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
             setItems(cachedData);
             if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
@@ -368,29 +362,27 @@ export default function TourWiseLanding() {
         const strategy = searchParams.get('strategy');
         const finalSTR = (strategy || window.__CACHE_STRATEGY__ || 'ETAGONLY').toUpperCase();
         const ttl = parseTTLms(finalSTR);
-        // Only consider cache-based short-circuit when TTL valid
+
         if (
             ttl > 0 &&
             cachedEntry &&
             typeof cachedEntry?.expires === 'number' &&
             Date.now() < cachedEntry?.expires
         ) {
-            // ensure clientVer is defined
-            // Reserve next allowed probe time immediately to avoid races
+
             const clientVer = cachedEntry?.etag ?? "";
             const now = Date.now();
             
-            //If still inside cooldown, use cache and stop
             nextAllowed = _lastProbeAt.get(key) || 0;
             if (now < nextAllowed) {
                 console.log("⏳ Skipping fetch — still within probe interval", { now, nextAllowed });
                 skipFetchUseCache(cachedEntry, ttl, setItems); 
-                return; // stop here
+                return { stoppedEarly: true };
             }
-
+            //1122
+            console.count("after nextallowed")
             _lastProbeAt.set(key, nowMs() + PROBE_INTERVAL_MS);
             
-            //If a probe is already in flight for this key, wait on it, then reuse cache
             console.log("inFlightProbes.has(key)", inFlightProbes.has(key))
             if (inFlightProbes.has(key)) {
                 console.log("➡️ Probe already running for key, awaiting existing probe");
@@ -399,73 +391,72 @@ export default function TourWiseLanding() {
                 } catch (e) {
                     console.warn("inFlight probe failed", e);
                 }
-                // after awaiting the probe, cachedEntry should still be valid — reuse it
                 skipFetchUseCache(cachedEntry, ttl, setItems);
                 return { stoppedEarly: true };
             }
 
-            // Start the probe (store the Promise so other callers can await)
             const probePromise = (async () => {
             try {
-                const updateNeeded = await probeBackend(clientVer);
-    
-                if (updateNeeded[0] === "0") {
+                const probeData = await probeBackend(clientVer);
+                console.log("probeData ",probeData[0])
+                if (probeData[0] === "0") {
                     console.log("... probe says no update — use cache");
                     skipFetchUseCache(cachedEntry, ttl, setItems);
                     return { stoppedEarly: true };
-                } else {ttl_flag = 1; }
+                }
+                console.log("CHECK")
+                const etag = probeData[1] || null;
 
-                // probe indicates update needed; caller will continue to actual fetch afterwards
-                console.log("... probe says updateNeeded, proceed to network fetch");
-                return { stoppedEarly: false };
+                console.log("probeData.etag ",etag)
+                const data = probeData[0] || null
+
+                cacheSet(TOUR_CACHE_KEY, { data, etag, ttl, fetchedAt: Date.now() });
+                console.log("req ", reqId, currentReqId)
+                setItems(data || []);
+                console.log("...done from update");
+                return { stoppedEarly: true };
             } catch (err) {
                 console.error("probeBackend error:", err);
-                // Allow retry later by removing nextAllowed marker
                 _lastProbeAt.delete(key);
-                // throw err;
-                return { stoppedEarly: false }; // continue to actual fetch
+                return { stoppedEarly: false };
             } finally {
                 inFlightProbes.delete(key);
             }
             })();
-            // save the promise so concurrent calls won't start a second probe
+
             inFlightProbes.set(key, probePromise);
-            // wait for the probe to finish, and inspect result
+
             let probeResult;
             try {
                 probeResult = await probePromise;
             } catch (err) {
-            // probe failed — decide your fallback: here we bail out and reuse cache
                 console.warn("probe failed, falling back to cache:", err);
                 skipFetchUseCache(cachedEntry, ttl, setItems);
                 return { stoppedEarly: true };
             }
-            // If the probe told us to stop early, we already used cache above
+
             if (probeResult?.stoppedEarly) {
+                console.count("stop early true")
                 return;
             }
-    
-            // else: probe indicates updateNeeded !== "0", so fallthrough to actual fetch
         }
-        // ---- actual network fetch (runs only if TTL invalid or probe decided updateNeeded) ----
+
         const headers = {};
         if (cachedEntry?.etag) {
             headers['If-None-Match'] = cachedEntry.etag;
             console.log(".... → Sending If-None-Match:", headers['If-None-Match']);
         }
-    
+
         currentController = new AbortController();
         const signal = currentController.signal;
     
         try {
             const res = await fetch(`${apiBaseTour}/api/tl/tour-landing`, { headers, signal });
-            // stale-response guard 1234
             if (reqId !== currentReqId && ttl_flag === 0) { 
                 console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
                 return;
             }
     
-            // 304 → reuse cached entry and update expires perhaps
             if (res.status === 304 && cachedEntry?.data) {
                 console.log(".... ♻️ Using cached data, ETag matched:", cachedEntry.etag);
                 cacheSet(TOUR_CACHE_KEY, { data: cachedEntry.data, etag: cachedEntry.etag, ttl, fetchedAt: Date.now() });
@@ -576,7 +567,6 @@ export default function TourWiseLanding() {
         );
     };
 
-    console.log("items",items)
     // ✅ Show loading or empty state
     if (!items) {
         return <p>Loading data...</p>; // API still fetching
@@ -612,7 +602,6 @@ export default function TourWiseLanding() {
         {   
             (() => {
                 // Step 1: Parse each item safely
-                console.log("Array.isArray(items)",Array.isArray(items))
                 if (Array.isArray(items)) {
                     try {
                         parsed = items
@@ -632,7 +621,7 @@ export default function TourWiseLanding() {
                     }
 
                 } else {
-                    parsed = tryParse(items.body) || [];
+                    parsed = tryParse(items) || [];
                 }
 
 
@@ -646,7 +635,6 @@ export default function TourWiseLanding() {
                 
                 // Step 3: Filter only tours
                 const tours2 = normalizedItems.filter(it => it?.tour?.type === "tour");
-                console.log("tours2",tours2)
             })()
 
             

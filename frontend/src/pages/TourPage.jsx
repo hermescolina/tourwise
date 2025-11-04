@@ -124,14 +124,43 @@ function primeStateFromCache(cacheKey, setter) {
     if (cached?.data) setter(cached.data);
     return cached; // return to reuse its etag
 }
-
-async function probeBackend(clientVer) {
+//1133
+// probeBackend — returns an object with res, text, and json (if JSON)
+async function probeBackend(clientVer, slug = "") {
   const PROBE_URL = `${apiBaseTour}/api/tp/tourpages-probe`;
-  const res = await fetch(`${PROBE_URL}?ver=${encodeURIComponent(clientVer || "")}`, { cache: "no-store" });
-  if (!res.ok) throw new Error("probe failed: " + res.status);
-  const text = (await res.text()).trim();
-  return text; // raw value from backend
+  const TIMEOUT_MS = 7000;
+  const url = `${PROBE_URL}?ver=${encodeURIComponent(clientVer || "")}&slug=${encodeURIComponent(slug || "")}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    console.log("[probeBackend] fetching:", url, "navigator.onLine:", navigator.onLine);
+    const res = await fetch(url, { cache: "no-store", signal: controller.signal });
+
+    if (!res.ok) {
+      throw new Error("probe failed: " + res.status + (res.statusText ? ` ${res.statusText}` : ""));
+    }
+
+    const text = (await res.text()).trim();
+
+    // attempt to parse JSON if content-type says so
+    let json = null;
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      try { json = JSON.parse(text); } catch (e) { /* ignore parse error */ }
+    }
+
+    return { res, text, json };
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(`probe timed out after ${TIMEOUT_MS} ms`);
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
+
+
 
 
 export default function TourPage() {
@@ -244,12 +273,6 @@ export default function TourPage() {
     
     // normalize raw cached/raw network data into a single tour object and videos array
 
-    // 1) Prime UI from cache (fast paint)
-    // const cachedEntry = primeStateFromCache(TOUR_CACHE_KEY, (cachedData) => {
-    //     setTour(cachedData);
-    //     setTourVideos(cachedData?.videos || []); 
-    //     if (cachedData?.title) document.title = `TourWise | ${cachedData.title}`;
-    // }); 1122
     const cachedEntry = cacheGet(TOUR_CACHE_KEY);
         if (cachedEntry?.data) {
         const { tourObj, videos, tips, tour_itinerary , history_images} = normalizeTourPayload(cachedEntry.data);
@@ -305,18 +328,20 @@ export default function TourPage() {
         const probePromise = (async () => {
         try {
             
-            const updateNeeded = await probeBackend(clientVer);
+            const probeData = await probeBackend(clientVer);
+
+            console.log("probeData",probeData)
     
-            if (updateNeeded === "0") {
+            if (probeData.text === "0") {
                 skipFetchUseCache(cachedEntry, ttl, setTour);
                 return { stoppedEarly: true };
-            } else {
-                ttl_flag = 1;
             }
+            
+            const etag = probeData.res.headers.get('ETag') || null;
 
-            // probe indicates update needed; caller will continue to actual fetch afterwards
-            console.log("... probe says updateNeeded, proceed to network fetch", ttl_flag);
-            return { stoppedEarly: false };
+            cacheSet(TOUR_CACHE_KEY, { probeData, etag, ttl, fetchedAt: Date.now() });
+            setTour(data);
+            setTourVideos(data.videos);
         } catch (err) {
             console.error("probeBackend error:", err);
             // Allow retry later by removing nextAllowed marker
@@ -359,15 +384,16 @@ export default function TourPage() {
 
     currentController = new AbortController();
     const signal = currentController.signal;
-    
+     console.log("signal", signal)
     try {
         const res = await fetch(`${apiBaseTour}/api/tp/tourpages-data/${encodeURIComponent(slug)}`);
         // stale-response guard
-
+        console.log("check 1")
         if (reqId !== currentReqId && ttl_flag === 0) {
             console.warn('fetchWithStrategy: ignoring stale response (reqId)', { reqId, currentReqId });
             return;
         }
+         console.log("check 2")
 
         
         // 304 → reuse cached entry and update expires perhaps
@@ -378,12 +404,14 @@ export default function TourPage() {
             setTourVideos(cachedEntry?.videos || []);
             return;
         }
+        console.log("check 3")
 
         if (!res.ok) {
             console.error('fetchWithStrategy: non-ok response', res.status);
            return;
         } 
 
+        console.log("check 4")
         let data;
         try {
             data = await res.json();
@@ -393,7 +421,7 @@ export default function TourPage() {
         }
         
         const etag = res.headers.get('ETag') || null;
-
+        console.log("check 5")
         
         
 

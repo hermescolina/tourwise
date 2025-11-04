@@ -8,6 +8,10 @@ from flask import (
     )
 import mysql.connector
 from dotenv import load_dotenv
+from redis_client import redis_client
+from memory_cache import memoryCache
+from typing import Any, Optional
+
 
 bp_tourpages = Blueprint("tourpages", __name__)
 
@@ -27,9 +31,72 @@ tours_db_config = {
 CACHE_FILE = os.getenv("tourpages_CACHE", "/var/lib/tourwise/tourpages.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
+# Redis keys & TTL
+REDIS_KEY_JSON = os.getenv("TOURWISE_REDIS_KEY_JSON", "tourwise:tourpages:json")
+REDIS_KEY_VER = os.getenv("TOURWISE_REDIS_KEY_VER", "tourwise:tourpages:json:ver")
+REDIS_TTL = int(os.getenv("TOURWISE_REDIS_TTL", str(60 * 60)))  # default 1 hour
+# Toggle to disable redis entirely (use "false" to disable)
+USE_REDIS = os.getenv("TOURWISE_USE_REDIS", "true").lower() != "false"
+
+MEM_KEY_JSON = os.getenv("TOURWISE_MEM_KEY_JSON", "tourwise:tourpages:json")
+MEM_KEY_VER = os.getenv("TOURWISE_MEM_KEY_VER", "tourwise:tourpages:json:ver")
+# ---- Memory cache settings -----------------------------------------------
+# toggle memory cache on/off
+USE_MEMORY_CACHE = os.getenv("TOURWISE_USE_MEMORY_CACHE", "true").lower() != "false"
+# TTL in seconds for memory cache entries
+MEMORY_CACHE_TTL = int(os.getenv("TOURWISE_MEMORY_CACHE_TTL", "300"))  # default 5 min
+# instantiate memory cache object (singleton)
+memory_cache = memoryCache(default_ttl=MEMORY_CACHE_TTL)
+
+# TTL in seconds
+VER_CACHE_TTL_MS = 500  # tweakable: 0.5 sec
+
 # 🔎 boot diagnostics (prints once at import)
 print(f"[tourpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
-print(f"[tourpages] tourpages_CACHE={CACHE_FILE}", flush=True)
+print(f"[tourpages] tourpage_CACHE={CACHE_FILE}", flush=True)
+print(f"[tourpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
+print(f"[tourpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
+
+#-------global helpers-------------------------------------------------------
+def _default_headers():
+    return {"content-type": "application/json"}
+
+def _normalize_body(maybe_str):
+    """
+    Ensure body is a parsed JSON object if it's a string,
+    otherwise return as-is (assume dict/list).
+    """
+    if isinstance(maybe_str, str):
+        try:
+            return json.loads(maybe_str)
+        except json.JSONDecodeError:
+            # If the body is plain string (not JSON), keep as string
+            return maybe_str
+    return maybe_str
+
+def write_both(redis_client, redis_key: str, data: Any, ver: str):
+    """
+    Writes data both to Redis (as JSON string) and to memory cache (as Python dict).
+    """
+    body = _normalize_body(data)
+    payload = {
+        "body": body,
+        "ver": ver,
+        "headers": _default_headers(),
+        "cached_at": time.time()
+    }
+
+    # Convert to JSON string for Redis
+    json_data = json.dumps(payload)
+
+    # Write to Redis (stringified)
+    redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
+    # redis_client.setex(f"{REDIS_KEY_JSON}:ver", REDIS_TTL, ver)
+    redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
+    # Write to memory cache (as Python object)
+    _memory_set(MEM_KEY_JSON, payload, ttl=VER_CACHE_TTL_MS / 1000)
+
+
 
 # ---- File helpers ---------------------------------------------------------
 def _read_file(path: str):
@@ -146,6 +213,114 @@ def get_tourpages_version():
     finally:
         cur.close()
 
+# ---- Redis helpers (non-breaking; tolerant) -------------------------------
+def _safe_decode(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode("utf-8")
+        except Exception:
+            return v.decode("utf-8", errors="replace")
+    return v
+
+def _redis_get_json_and_ver():
+    try: #1234
+        current_app.logger.info(f"[tourlandingpages] Redis REDIS_KEY_JSON: {REDIS_KEY_JSON}")
+        json_data = redis_client.get(REDIS_KEY_JSON)
+        current_app.logger.info(f"[tourlandingpages] Redis json data: {json_data}")
+        ver_data = redis_client.get(REDIS_KEY_VER)
+        current_app.logger.info(f"[tourlandingpages] Redis json ver: {ver_data}")
+        if json_data is None or ver_data is None:
+            return None, None
+        return _safe_decode(json_data), _safe_decode(ver_data).strip()
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis get error: {e}")
+        return None, None
+
+def _redis_set_json_and_ver(json_data, ver):
+    try:
+        # store string payloads
+        redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
+        redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
+        current_app.logger.info(f"[tourlandingpages] Redis cache updated ver={ver}")
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis set error: {e}")
+
+def _redis_delete():
+    try:
+        redis_client.delete(REDIS_KEY_JSON, REDIS_KEY_VER)
+        current_app.logger.info("[tourlandingpages] Redis keys deleted")
+    except Exception as e:
+        current_app.logger.warning(f"[tourlandingpages] Redis delete error: {e}")
+
+# ---- Memory cache helpers -------------------------------------------------
+def _memory_get(key: str):
+    """Retrieve a value from memory cache."""
+    if not USE_MEMORY_CACHE:
+        # If caching is disabled globally, skip lookup
+        return None
+
+    # Try to get the cached value by key
+    cached = memory_cache.get(key)
+
+    # If nothing is found, return None
+    if not cached:
+        return None
+
+    # Otherwise return the cached item
+    return cached
+
+def _memory_set(key: str, value, ttl: int = None):
+    if not USE_MEMORY_CACHE:
+        return
+    memory_cache.set(key, value, ttl or MEMORY_CACHE_TTL)
+
+def _memory_delete(key: str):
+    if not USE_MEMORY_CACHE:
+        return
+    memory_cache.delete(key)
+
+def _default_headers():
+    return {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
+
+def _get_memory_ver_cached(redis_json, redis_ver):
+    """
+    Returns the cached backend version for probes.
+    If expired or missing, fetches from DB and updates memory cache.
+    """
+    cached = _memory_get(MEM_KEY_JSON)
+    now = time.time()
+    # Proper logging — show actual cached value even if None
+    current_app.logger.info(f"check 3333 cached={cached!r}")
+
+    # Use the same timestamp key we write below: "cached_at"
+    current_app.logger.info(f"check 3 in cached {isinstance(cached, dict)}")
+    # if cached and isinstance(cached, dict):
+    if cached:
+        cached_at = cached.get("cached_at", 0)
+        current_app.logger.info(f"check 3.1 cached_at < {(now - cached_at) < (VER_CACHE_TTL_MS / 1000)}")
+        if (now - cached_at) < (VER_CACHE_TTL_MS / 1000):
+            mem_ver = cached.get("ver")
+            if mem_ver:
+                current_app.logger.debug(f"Using in-memory cached ver={mem_ver}")
+                return mem_ver
+
+    # Cache miss or expired — determine the version to use
+    ver = redis_ver or get_tourlandingpages_version() or get_tourlandingpages_token()
+
+    # Store a consistent cache shape (body, ver, headers, cached_at)
+    # current_app.logger.debug(f"Using in-memory redis_json ={redis_json}")
+
+    write_both(redis_client, MEM_KEY_VER, redis_json, ver) #1234
+    current_app.logger.info(f"Cached new landing ver={ver}")
+    return ver
+
 #NEED TO CHANGE REFRESH LOGIC
 # ---- Probe: lightweight endpoint to check if client should refresh -----
 # In-memory small cache for backend version to avoid DB hit on every probe
@@ -177,7 +352,7 @@ def _get_backend_ver_cached():
 
 
 @bp_tourpages.route("/tourpages-probe", methods=["GET"])
-def probe_tourpages():
+def probe_tourpages(slug):
     """
     Lightweight probe endpoint.
     Query param: ?ver=<client_version>
@@ -200,7 +375,7 @@ def probe_tourpages():
         return ("1", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
 
     current_app.logger.debug("Probe result: backend_ver=%r update_needed=0", backend_ver)
-    return ("0", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
+    return get_tourpages(slug)
 
 
 @bp_tourpages.route("/tourpages-data/<slug>", methods=["GET"])

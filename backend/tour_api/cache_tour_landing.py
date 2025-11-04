@@ -125,7 +125,7 @@ def _fetch_tourlandingpages_json():
     conn = mysql.connector.connect(**tours_db_config)
     try:
         cur = conn.cursor()
-        try:
+        try: 
             cur.execute(f"SET SESSION group_concat_max_len = {GROUP_CONCAT_MAX_LEN};")
             cur.execute("SELECT page_json FROM vw_tour_landing_page_json;")
             rows = cur.fetchall()  
@@ -334,13 +334,14 @@ def probe_tourlandingpages():
     current_app.logger.info(f"redis version {redis_ver}")
     mem_ver = _get_memory_ver_cached(redis_json, redis_ver)
      # Safe handling if Redis is empty
+    
     redis_ver = redis_ver or ""
-    current_app.logger.info(f"CHECK PROBE 6 {mem_ver}")
-    current_app.logger.info(f"CHECK PROBE 7 {redis_ver}")
+    current_app.logger.info(f"CHECK BACKEND VER {backend_ver}")
+    current_app.logger.info(f"CHECK MEM VER {mem_ver}")
+    current_app.logger.info(f"CHECK REDIS VER {redis_ver}")
     if mem_ver == redis_ver and backend_ver == redis_ver:
-        current_app.logger.debug("Probe result: mem_ver=%r update_needed=0 ok ok", mem_ver)
+        current_app.logger.debug("Probe result: mem_ver=%r update_needed=0 ok", mem_ver)
         return ("0", 200, {"X-Redis-TTL": str(redis_ver)})
-
     if mem_ver != redis_ver and backend_ver == redis_ver:
         headers = {
             "X-Redis-TTL": str(mem_ver)
@@ -349,9 +350,8 @@ def probe_tourlandingpages():
 
         current_app.logger.debug("Probe result: mem_ver=%r update_needed=0", mem_ver)
         return ("0", 200, {"X-Redis-TTL": str(redis_ver)})
-
-    current_app.logger.debug("Probe result: backend_ver=%r update_needed=1", backend_ver)
-    return ("1", 200, {"X-Redis-TTL": 0})
+    
+    return get_tourlandingpages()
 
 
 ###########
@@ -375,13 +375,11 @@ def get_tourlandingpages():
     # ---- Normalize If-None-Match header ----
     inm_raw = request.headers.get("If-None-Match") or ""
     update_needed = request.headers.get("If-Update-Needed") or ""
+
     inm = inm_raw.strip().strip('"')
     current_app.logger.info(f"Query params: force={force}, If-None-Match={inm_raw} -> normalized: {inm}")
     
-    #===> must check if cache json is existing, if not ignore redis and write json file first 
-    # ---- Try Redis first (shared/global cache) ----
-    #1234
-    if inm:
+    if inm and update_needed == 0:
         cached = _memory_get(MEM_KEY_JSON)
         if cached:
             current_app.logger.info(f"Memory cache hit {cached}")
@@ -420,12 +418,9 @@ def get_tourlandingpages():
             }
             return (redis_json, 200, headers)
 
-        # return (redis_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": f'"{redis_ver_norm}"'})
-    current_app.logger.info("CHECK 2")
     # ---- File cache fallback ----
     cached_json, cached_ver = None, None
     if os.path.exists(CACHE_FILE):
-        current_app.logger.info("CHECK 2.1")
         current_app.logger.info(f"Using CACHE_FILE={CACHE_FILE}")
 
         # Read cache JSON and version only once
@@ -433,15 +428,11 @@ def get_tourlandingpages():
         cached_ver_raw = _read_file(CACHE_FILE + ".ver")
         cached_ver = cached_ver_raw.strip() if cached_ver_raw else None
         
-        current_app.logger.info("CHECK 2.2")
         if cached_json and update_needed == 0:
-            current_app.logger.info("CHECK 2.2.1")
             # Store to Redis + memory cache
-            current_app.logger.info("UPDATE NEEDED 0")
             write_both(redis_client, MEM_KEY_JSON, cached_json, cached_ver or ver)
             return cached_json
 
-    current_app.logger.info("UPDATE NEEDED")
     # ---- Fetch backend version/token ----
     ver_db = get_tourlandingpages_version()
     token = get_tourlandingpages_token()
@@ -469,7 +460,6 @@ def get_tourlandingpages():
             _redis_delete()
         except Exception:
             pass
-
     if force:
         _memory_delete("landing:json")
             
