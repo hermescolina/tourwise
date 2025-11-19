@@ -19,15 +19,24 @@ from flask import (
 )
 
 from mysql.connector import Error as MySQLError
+from werkzeug.utils import secure_filename
+from db_pool import connection_pool
 
 from datetime import datetime, timezone
 
-
 import mimetypes
+
+try:
+    import db_pool
+    print("db_pool module imported, pool should be initialized.")
+except Exception as e:
+    print(f"Failed to import or initialize db_pool: {e}")
+    # You might want to prevent the app from starting if the DB pool fails.
+    exit(1)
 
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-import mysql.connector
+# import mysql.connector
 from dotenv import load_dotenv
 
 
@@ -48,6 +57,7 @@ from cache_tourcards import bp_tourcards
 from cache_tourcardsadmin import bp_tourcardsadmin
 from cache_touritinerary import bp_touritinerary
 from cache_historyculture import bp_history_images
+from config import config_bp
 from test_routes import test_bp
 
 
@@ -704,7 +714,7 @@ def update_tour(slug):
 def upload_history_image(slug):
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor() as cursor:
             cursor.execute("SELECT id FROM tours WHERE slug = %s", (slug,))
             result = cursor.fetchone()
@@ -737,41 +747,26 @@ def upload_history_image(slug):
 
         db.close()
         return jsonify({"message": "History image uploaded successfully"})
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 # # ✅ Patch Delete history images for a tour
-# @app.route("/api/history-image/<int:image_id>", methods=["PATCH"])
-# def update_history_image(image_id):
-#     print("UPDATE tour_history_images", flush=True)
-#     caption = request.form.get("caption")
-#     file = request.files.get("image")
-
-#     # conn = mysql.connector.connect(**tours_db_config)
-#     conn = get_db_connection()
-#     cursor = conn.cursor()
-#     print("UPDATE tour_history_images SET caption=%s WHERE id=%s", (caption, image_id),flush=True)
-#     if caption:
-#         cursor.execute(
-#             "UPDATE tour_history_images SET caption=%s WHERE id=%s", (caption, image_id)
-#         )
-
-#     if file:
-#         filename = secure_filename(file.filename)
-#         filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-#         file.save(filepath)
-#         cursor.execute(
-#             "UPDATE tour_history_images SET image_path=%s WHERE id=%s",
-#             (filename, image_id),
-#         )  # ✅ Fix column name here too
-
-#     conn.commit()
-#     cursor.close()
-#     conn.close()
-#     return jsonify({"message": "Image updated successfully"})
-
 @app.route("/api/history-image/<int:image_id>", methods=["PATCH"])
 def update_history_image(image_id):
     print("🟡 UPDATE tour_history_images called", flush=True)
@@ -779,75 +774,145 @@ def update_history_image(image_id):
     caption = request.form.get("caption")
     file = request.files.get("image")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # 1. Handle the "nothing to do" case first, without touching the database.
+    if caption is None and not file:
+        return jsonify({"message": "No caption or file provided, no changes made"}), 200
 
-    # 🧠 Log incoming data
-    print(f"→ image_id: {image_id}", flush=True)
-    print(f"→ caption: {caption}", flush=True)
-    print(f"→ file: {file.filename if file else 'None'}", flush=True)
+    conn = None
+    try:
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor()
 
-    # 🧩 Update caption if provided
-    if caption:
-        query = "UPDATE tour_history_images SET caption=%s WHERE id=%s"
-        params = (caption, image_id)
-        print(f"📝 Executing: {query} | params={params}", flush=True)
-        cursor.execute(query, params)
+        changes_made = False
 
-    # 🧩 Update file if provided
-    if file:
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-        file.save(filepath)
-        query = "UPDATE tour_history_images SET image_path=%s WHERE id=%s"
-        params = (filename, image_id)
-        print(f"🖼️ Executing: {query} | params={params}", flush=True)
-        cursor.execute(query, params)
+        # --- GATHER ALL DATABASE WORK ---
 
-    conn.commit()
-    print("✅ Commit complete", flush=True)
+        # 🧩 Update caption if provided
+        if caption is not None:
+            query = "UPDATE tour_history_images SET caption=%s WHERE id=%s"
+            params = (caption, image_id)
+            print(f"📝 Queuing caption update: {query} | params={params}", flush=True)
+            cursor.execute(query, params)
+            changes_made = True
 
-    cursor.close()
-    conn.close()
-    print("🔚 Connection closed\n", flush=True)
+        # 🧩 Update file if provided
+        if file:
+            # Note: File system operations can also fail!
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            file.save(filepath)
 
-    return jsonify({"message": "Image updated successfully"})
+            query = "UPDATE tour_history_images SET image_path=%s WHERE id=%s"
+            params = (filename, image_id)
+            print(f"🖼️ Queuing image path update: {query} | params={params}", flush=True)
+            cursor.execute(query, params)
+            changes_made = True
 
+        # --- FINALIZE THE TRANSACTION ---
+
+        # 2. Commit ONCE, after all the work is queued up.
+        if changes_made:
+            conn.commit()
+            print("✅ Commit successful.", flush=True)
+            # Check if the ID actually existed
+            if cursor.rowcount == 0:
+                 return jsonify({"error": f"No image found with id {image_id}"}), 404
+            return jsonify({"message": "Image updated successfully"}), 200
+        else:
+            # This part should no longer be reachable due to the check at the top,
+            # but it's safe to keep.
+            return jsonify({"message": "No changes made"}), 200
+
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 @app.route("/api/history_image/<int:image_id>", methods=["DELETE"])
 def delete_history_image(image_id):
     # conn = mysql.connector.connect(**tours_db_config)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM tour_history_images WHERE id=%s", (image_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({"message": "Image deleted successfully"})
-
+    try:
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tour_history_images WHERE id=%s", (image_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": "Image deleted successfully"})
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 @app.route("/api/history_images/<slug>", methods=["GET"])
 def get_history_images(slug):
     # conn = mysql.connector.connect(**tours_db_config)
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    try:
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
 
-    cursor.execute(
-        """
-        SELECT hi.id, hi.image_path AS filename, hi.caption, hi.category
-        FROM tour_history_images hi
-        JOIN items i ON hi.tour_id = i.item_id
-        WHERE i.slug = %s
-    """,
-        (slug,),
-    )
+        cursor.execute(
+            """
+            SELECT hi.id, hi.image_path AS filename, hi.caption, hi.category
+            FROM tour_history_images hi
+            JOIN items i ON hi.tour_id = i.item_id
+            WHERE i.slug = %s
+        """,
+            (slug,),
+        )
 
-    images = cursor.fetchall()
+        images = cursor.fetchall()
 
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
 
-    return jsonify(images)
+        return jsonify(images)
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 
@@ -877,7 +942,7 @@ def save_video_embed(slug):
             return jsonify({"error": "Video ID is required"}), 400
 
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor() as cursor:
             print(f"🔍 Looking up tour ID for slug: '{slug}'")
             cursor.execute("SELECT id FROM tours WHERE slug = %s", (slug,))
@@ -903,16 +968,30 @@ def save_video_embed(slug):
 
         db.close()
         return jsonify({"message": "Video embed saved successfully."}), 201
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error in save_video_embed:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 @app.route("/api/tours/<slug>/videos")
 def get_tour_videos(slug):
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor(dictionary=True) as cursor:
             cursor.execute("SELECT item_id FROM vw_tour_page  WHERE slug = %s", (slug,))
             result = cursor.fetchone()
@@ -933,17 +1012,31 @@ def get_tour_videos(slug):
 
         db.close()
         return jsonify(videos)
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error in get_tour_videos:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tours/<slug>/video/<int:video_id>", methods=["DELETE"])
 def delete_tour_video(slug, video_id):
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor() as cursor:
             # Verify tour exists
             cursor.execute("SELECT item_id FROM vw_tour_page WHERE slug = %s", (slug,))
@@ -961,31 +1054,64 @@ def delete_tour_video(slug, video_id):
 
         db.close()
         return jsonify({"message": "Video deleted"}), 200
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error deleting video:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/history_images/<slug>/<int:image_id>", methods=["DELETE"])
 def delete_history_image_by_slug(slug, image_id):
-    # conn = mysql.connector.connect(**tours_db_config)
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        # conn = mysql.connector.connect(**tours_db_config)
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor()
 
-    # Optional: validate tour slug
-    cursor.execute("SELECT item_id FROM vw_tour_page WHERE slug = %s", (slug,))
-    tour = cursor.fetchone()
-    if not tour:
+        # Optional: validate tour slug
+        cursor.execute("SELECT item_id FROM vw_tour_page WHERE slug = %s", (slug,))
+        tour = cursor.fetchone()
+        if not tour:
+            cursor.close()
+            conn.close()
+            return jsonify({"error": "Tour not found"}), 404
+
+        cursor.execute("DELETE FROM tour_history_images WHERE id = %s", (image_id,))
+        conn.commit()
         cursor.close()
         conn.close()
-        return jsonify({"error": "Tour not found"}), 404
-
-    cursor.execute("DELETE FROM tour_history_images WHERE id = %s", (image_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({"message": "Image deleted successfully"})
+        return jsonify({"message": "Image deleted successfully"})
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tours/<slug>/video/<int:video_id>", methods=["PATCH"])
@@ -1002,7 +1128,7 @@ def update_tour_video(slug, video_id):
             return jsonify({"error": "category is required"}), 400
 
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor() as cursor:
             cursor.execute(
                 """
@@ -1012,21 +1138,34 @@ def update_tour_video(slug, video_id):
             """,
                 (caption, category, tour_day, video_id),
             )
-
             db.commit()
-
         db.close()
         return jsonify({"message": "Video updated successfully"})
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error in update_tour_video:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tours/list", methods=["GET"])
 def list_all_tours():
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor(dictionary=True) as cursor:
             cursor.execute(
                 "SELECT item_id, slug, title FROM vw_tour_page ORDER BY title ASC"
@@ -1034,16 +1173,31 @@ def list_all_tours():
             tours = cursor.fetchall()
         db.close()
         return jsonify(tours)
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error in list_all_tours:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tours/<slug>/history_images", methods=["GET"])
 def get_tour_history_images(slug):
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor(dictionary=True) as cursor:
             query = """
                 SELECT h.id, h.image_path AS url, h.caption, h.category
@@ -1055,29 +1209,59 @@ def get_tour_history_images(slug):
             images = cursor.fetchall()
         db.close()
         return jsonify(images)
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("🔥 Error in get_tour_history_images:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/categories", methods=["GET"])
 def get_categories():
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor(dictionary=True) as cursor:
             cursor.execute("SELECT id, name FROM categories ORDER BY name ASC")
             categories = cursor.fetchall()
         db.close()
         return jsonify(categories)
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/book", methods=["POST"])  # NEED FIX
 def book_tour():
     data = request.json
-
     user_id = data.get("user_id")
     tour_id = data.get("tour_id")
     num_guests = data.get("num_guests", 1)
@@ -1091,7 +1275,7 @@ def book_tour():
 
     try:
         # conn = mysql.connector.connect(**tours_db_config)
-        conn = get_db_connection()
+        conn = connection_pool.get_connection()
         cursor = conn.cursor()
 
         # 🔍 Fetch vendor_id and vendor_email from tour
@@ -1142,29 +1326,63 @@ def book_tour():
             jsonify({"message": "Booking successful. Vendor will confirm via email."}),
             200,
         )
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error during booking:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
+0
 
 
 @app.route("/api/delete-tour/<slug>", methods=["DELETE", "OPTIONS"])
 def delete_tour(slug):
-    # conn = mysql.connector.connect(**tours_db_config)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    print("DELETE FROM items WHERE slug = %s", (slug,),flush=True)
-    cursor.execute("DELETE FROM items WHERE slug = %s", (slug,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return jsonify({"message": "Tour deleted successfully 111"})
+    try:
+        # conn = mysql.connector.connect(**tours_db_config)
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor()
+        print("DELETE FROM items WHERE slug = %s", (slug,),flush=True)
+        cursor.execute("DELETE FROM items WHERE slug = %s", (slug,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": "Tour deleted successfully 111"})
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 @app.route("/api/tours-list", methods=["GET"]) #not used subject to cleaning
 def get_tour_list():
     try:
         # db = mysql.connector.connect(**tours_db_config)
-        db = get_db_connection()
+        db = connection_pool.get_connection()
         with db.cursor(dictionary=True) as cursor:
             cursor.execute(
                 """
@@ -1179,21 +1397,54 @@ def get_tour_list():
 
         db.close()
         return jsonify(tours)
-
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
     except Exception as e:
-        print("❌ Error in /api/tours-list:", e)
-        return jsonify({"error": str(e)}), 500
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tour-titles", methods=["GET"])
 def get_tour_titles():
-    db = get_db_connection()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT id, item_id, title, price, slug FROM items WHERE item_type = 'tour' ORDER BY title ASC"
-    )
-    results = cursor.fetchall()
-    return jsonify(results)
+    try:
+        db = connection_pool.get_connection()
+        cursor = db.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT id, item_id, title, price, slug FROM items WHERE item_type = 'tour' ORDER BY title ASC"
+        )
+        results = cursor.fetchall()
+        return jsonify(results)
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tour-itinerary/<string:slug>", methods=["GET"])
@@ -1209,26 +1460,45 @@ def update_tour_itinerary(slug):
 
     # ✅ Fetch item_id (tour ID) from vw_tour_page using slug
     # conn = mysql.connector.connect(**tours_db_config)
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("SELECT item_id,item_type FROM vw_touradmin_page WHERE slug = %s", (slug,))
-    result = cursor.fetchone()
-    cursor.close()
-    conn.close()
+    try:
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT item_id,item_type FROM vw_touradmin_page WHERE slug = %s", (slug,))
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
 
-    if not result:
-        return jsonify({"error": "Tour not found"}), 404
+        if not result:
+            return jsonify({"error": "Tour not found"}), 404
 
-    tour_id = result["item_id"] 
-    item_type = result["item_type"] 
+        tour_id = result["item_id"] 
+        item_type = result["item_type"] 
 
-    # ✅ Validate itinerary format
-    if not isinstance(data.get("tour_itinerary", []), list):
-        return jsonify({"error": "Invalid itinerary format"}), 400
+        # ✅ Validate itinerary format
+        if not isinstance(data.get("tour_itinerary", []), list):
+            return jsonify({"error": "Invalid itinerary format"}), 400
 
-    # ✅ Update using ID instead of slug
-    update_tour_in_db_by_id(tour_id, item_type, data)
-    return jsonify({"message": "Tour updated"})
+        # ✅ Update using ID instead of slug
+        update_tour_in_db_by_id(tour_id, item_type, data)
+        return jsonify({"message": "Tour updated"})
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 
 @app.route("/api/tour-tips/<slug>", methods=["GET", "PUT", "POST", "OPTIONS"])
@@ -1312,6 +1582,7 @@ app.register_blueprint(bp_tourcards, url_prefix="/api/tc")
 app.register_blueprint(bp_tourcardsadmin, url_prefix="/api/tca")
 app.register_blueprint(bp_touritinerary, url_prefix="/api/ti")
 app.register_blueprint(bp_history_images, url_prefix="/api/th")
+app.register_blueprint(config_bp, url_prefix="/api/config")
 app.register_blueprint(test_bp, url_prefix="/api/tred")
 
 

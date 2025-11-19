@@ -144,7 +144,7 @@ def _fetch_tourpages_json(slug):
 
             # ✅ Only one query — view already has slug
             cur.execute(
-                "SELECT page_json FROM vw_tour_page_json where slug = %s; LIMIT 1",
+                "SELECT page_json FROM vw_tour_page_json where slug = %s LIMIT 1",
                 (slug,),
             )
             row = cur.fetchone()
@@ -204,7 +204,7 @@ def get_tourpages_version():
     conn = mysql.connector.connect(**tours_db_config)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT v FROM tourpages_meta WHERE k='tourpages'")
+        cur.execute("SELECT v FROM tourpages_meta WHERE k='tourpage'")
         row = cur.fetchone()
         if not row:
             return None
@@ -331,7 +331,9 @@ VER_CACHE_TTL_MS = 500  # tweakable: how long to reuse the resolved backend vers
 def _get_backend_ver_cached():
     """Return backend version string or None on error. Caches for VER_CACHE_TTL_MS ms."""
     now_ms = int(time.time() * 1000)
+    current_app.logger.info("checking version format")
     if _VER_CACHE["ver"] is not None and (now_ms - _VER_CACHE["fetched_at_ms"] < VER_CACHE_TTL_MS):
+        current_app.logger.info(f'ver cache {_VER_CACHE["ver"]}')
         return _VER_CACHE["ver"]
 
     try:
@@ -342,6 +344,7 @@ def _get_backend_ver_cached():
 
         _VER_CACHE["ver"] = backend_ver
         _VER_CACHE["fetched_at_ms"] = now_ms
+        current_app.logger.info(f'ver cache 2 {_VER_CACHE["ver"]}')
         return backend_ver
     except Exception:
         current_app.logger.exception("Failed to read backend version/token for probe")
@@ -350,32 +353,34 @@ def _get_backend_ver_cached():
         _VER_CACHE["fetched_at_ms"] = 0
         return None
 
-
-@bp_tourpages.route("/tourpages-probe", methods=["GET"])
+@bp_tourpages.route("/tourpages-probe/<slug>", methods=["GET"])
 def probe_tourpages(slug):
     """
     Lightweight probe endpoint.
     Query param: ?ver=<client_version>
-    Returns plain text '0' (no update) or '1' (update needed).
-    If server cannot determine backend version, respond '1' (conservative).
-    Response headers: Content-Type text/plain, Cache-Control no-store.
+    Returns:
+      - '0' if client is up-to-date
+      - full tourpages data if update is needed
     """
+    current_app.logger.info("➡️ Entered /tourpages-probe")
+    current_app.logger.info(f"probe slug {slug}")
     client_ver = (request.args.get("ver") or "").strip()
-    current_app.logger.debug("Probe called, client_ver=%r", client_ver)
-
     backend_ver = _get_backend_ver_cached()
 
+    current_app.logger.debug("Probe called, client_ver=%r backend_ver=%r", client_ver, backend_ver)
+
     if backend_ver is None:
-        current_app.logger.warning("Probe: backend version unavailable; returning 1 (update needed)")
-        return ("1", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
+        current_app.logger.warning("Backend version unavailable; returning fresh data")
+        # Return fresh tourpage data if backend version is unknown
+        return get_tourpages(slug)
 
-    # If client has no ver or ver mismatches backend -> tell client to update (1)
     if not client_ver or client_ver != backend_ver:
-        current_app.logger.debug("Probe result: backend_ver=%r update_needed=1", backend_ver)
-        return ("1", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
+        current_app.logger.debug("Client outdated; returning fresh data")
+        return get_tourpages(slug)
 
-    current_app.logger.debug("Probe result: backend_ver=%r update_needed=0", backend_ver)
-    return get_tourpages(slug)
+    # Client is up-to-date
+    current_app.logger.debug("Client up-to-date; returning 0")
+    return ("0", 200, {"Content-Type": "text/plain", "Cache-Control": "no-store"})
 
 
 @bp_tourpages.route("/tourpages-data/<slug>", methods=["GET"])
@@ -395,7 +400,7 @@ def get_tourpages(slug):
     cached_json = None
     cached_ver = None
 
-
+    #111222
     # Try to read file cache if configured (harmless if not present)
     if cache_path:
         current_app.logger.info(f"Using cache_path={cache_path}")
@@ -414,12 +419,10 @@ def get_tourpages(slug):
     # Resolve version/token from DB (lightweight)
     ver = ""
     try:
-        with mysql.connector.connect(**tours_db_config) as conn:
-            ver_db = get_tourpages_version()
-            token = get_tourpages_token()
-            ver = (ver_db or token or "").strip()
-            current_app.logger.info("DB version resolved (normalized): %r", ver)
-            
+        ver_db = get_tourpages_version()
+        token = get_tourpages_token()
+        ver = (ver_db or token or "").strip()
+        current_app.logger.info("DB version resolved (normalized): %r", ver)
     except Exception:
         current_app.logger.exception("Failed resolving DB version/token")
         # If we couldn't get ver from DB, but we have a cached_ver, fall back to it.

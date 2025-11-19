@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  tour_api:
+    # We are MERGING new configuration into the tour_api service
+    env_file:
+      - ./backend/tour_api/.env.development # <-- Use the development .env file
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: 1
+    # command: flask run --host=0.0.0.0 --port=3001 # <-- The development command
+    command: flask run --host=0.0.0.0 --port=3001 --reload
+
+  frontend:
+    # ...
+    volumes:
+      - ./frontend:/app # Mount source code for live-reloading
+    command: ["npm", "run", "dev"]

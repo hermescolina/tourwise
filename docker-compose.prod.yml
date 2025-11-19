@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  tour_api:
+    env_file:
+      - ./backend/tour_api/.env.production # <-- Use the production .env file
+    environment:
+      FLASK_ENV: production # No debug mode
+    command: gunicorn --bind 0.0.0.0:3001 main:app # <-- The production command
+    # In production, you might not mount the source code directly
+    volumes: []
+
+  frontend:
+    # ...
+    # In production, you don't mount the source code
+    volumes: []
+    command: ["npm", "run", "build"] # First build, then you'd need a webserver like Nginx

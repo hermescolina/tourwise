@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@LandingPage/*": ["src/features/LandingPage/*"]
+    }
+  },
+  "include": ["src"]
+}

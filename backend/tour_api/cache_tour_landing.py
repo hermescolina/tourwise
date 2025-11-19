@@ -1,11 +1,15 @@
 # bp_tourlandingpages_tourlandingpages.py
 import os, json, hashlib, time, logging
-from flask import Blueprint, jsonify, request, send_file, abort, current_app
+from flask import Blueprint, jsonify, request, send_file, abort, current_app, Response
 import mysql.connector
+from mysql.connector import pooling
+from mysql.connector import Error as MySQLError
 from dotenv import load_dotenv
 from redis_client import redis_client
 from memory_cache import memoryCache
 from typing import Any, Optional
+from werkzeug.utils import secure_filename
+from db_pool import connection_pool
 
 bp_tourlandingpages = Blueprint("tourlandingpages", __name__)
 
@@ -21,7 +25,7 @@ tours_db_config = {
     "port": int(os.getenv("TOUR_DB_PORT", "3306")),
 }
 
-CACHE_FILE = os.getenv("tourlandingpages_CACHE", "/var/lib/tourwise/tourlandingpages.json")
+# CACHE_FILE = os.getenv("tourlandingpages_CACHE", "/var/lib/tourwise/tourlandingpages.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
 # Redis keys & TTL
@@ -46,7 +50,7 @@ VER_CACHE_TTL_MS = 500  # tweakable: 0.5 sec
 
 # 🔎 boot diagnostics (prints once at import)
 print(f"[tourlandingpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
-print(f"[tourlandingpages] tourlandingpages_CACHE={CACHE_FILE}", flush=True)
+# print(f"[tourlandingpages] tourlandingpages_CACHE={CACHE_FILE}", flush=True)
 print(f"[tourlandingpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
 print(f"[tourlandingpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
 
@@ -67,28 +71,62 @@ def _normalize_body(maybe_str):
             return maybe_str
     return maybe_str
 
-def write_both(redis_client, redis_key: str, data: Any, ver: str):
+def extract_data_from_redis_json(redis_json_string: str) -> Any:
     """
-    Writes data both to Redis (as JSON string) and to memory cache (as Python dict).
+    Parses a JSON string from Redis and unwraps the nested 'body' keys
+    to return the actual data payload.
+
+    Args:
+        redis_json_string: The JSON string retrieved from the Redis cache.
+
+    Returns:
+        The innermost data payload, or None if input is invalid.
     """
-    body = _normalize_body(data)
-    payload = {
-        "body": body,
-        "ver": ver,
-        "headers": _default_headers(),
-        "cached_at": time.time()
-    }
+    if not redis_json_string:
+        return None
 
-    # Convert to JSON string for Redis
-    json_data = json.dumps(payload)
+    try:
+        # Step 1: Parse the outer JSON string into a Python dictionary
+        data = json.loads(redis_json_string)
 
-    # Write to Redis (stringified)
-    redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
-    # redis_client.setex(f"{REDIS_KEY_JSON}:ver", REDIS_TTL, ver)
-    redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
-    # Write to memory cache (as Python object)
-    _memory_set(MEM_KEY_JSON, payload, ttl=VER_CACHE_TTL_MS / 1000)
+        # Step 2: Loop as long as the data is a dictionary and has a 'body' key
+        while isinstance(data, dict) and 'body' in data:
+            # Go one level deeper
+            data = data['body']
 
+        # Step 3: The loop has finished, 'data' now holds the final payload
+        return data
+
+    except (json.JSONDecodeError, TypeError) as e:
+        # Handle cases where the input is not valid JSON or structure is unexpected
+        current_app.logger.error(f"Failed to extract data from redis_json: {e}")
+        return None
+
+async def populate_redis_from_db():
+    # This is your helper function
+    print("Fetching fresh data from DB and populating Redis...")
+    ver = await db.get_current_version()
+    json_data = await db.get_tour_landing_data()
+
+    # >>> THIS IS YOUR CODE <<<
+    await redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_data)
+    await redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
+
+
+# (Assuming your other helper functions like _normalize_body, _default_headers, etc. are defined)
+# A simpler, corrected write_both
+def write_both(redis_client, json_payload_string: str, ver: str):
+    """Writes a JSON string to Redis and a decoded object to memory."""
+    try:
+        # 1. Write the already-serialized string to Redis
+        redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_payload_string)
+        redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
+
+        # 2. Decode the string into a Python object for the memory cache
+        python_object = json.loads(json_payload_string)
+        _memory_set(MEM_KEY_JSON, python_object, ttl=VER_CACHE_TTL_MS / 1000)
+    except Exception as e:
+        current_app.logger.warning(f"[write_both] Cache write error: {e}")
 
 # ---- File helpers ---------------------------------------------------------
 def _read_file(path: str):
@@ -122,8 +160,9 @@ def _write_atomic(path: str, content) -> None:
 
 # ---- DB helpers -----------------------------------------------------------
 def _fetch_tourlandingpages_json():
-    conn = mysql.connector.connect(**tours_db_config)
+    
     try:
+        conn = connection_pool.get_connection()
         cur = conn.cursor()
         try: 
             cur.execute(f"SET SESSION group_concat_max_len = {GROUP_CONCAT_MAX_LEN};")
@@ -135,50 +174,82 @@ def _fetch_tourlandingpages_json():
         if not rows:
             raise RuntimeError("vw_tour_landing_page_json returned empty payload")
 
-        result = [r[0] for r in rows]
-        return json.dumps(result, ensure_ascii=False)
+        # result = [r[0] for r in rows]
+        # list_of_json_strings = [r[0] for r in rows]
+         # 2. Join these strings with a comma, then wrap them in array brackets `[]`.
+        #    This manually constructs a valid JSON array string.
+        # json_array_string = f"[{','.join(list_of_json_strings)}]"
+        
+        # 3. Return this final, correct string.
+        #    DO NOT call json.dumps() again.
+        # return json_array_string
+        # return json.dumps(result, ensure_ascii=False)
+         # --- THE CORRECT FLASK-FRIENDLY FIX ---
+        
+        list_of_python_dicts = []
+        for row in rows:
+            json_string_from_db = row[0]
+            try:
+                # Convert the JSON string from the DB into a Python dictionary
+                python_dict = json.loads(json_string_from_db)
+                list_of_python_dicts.append(python_dict)
+            except (json.JSONDecodeError, TypeError):
+                current_app.logger.warning(f"Skipping malformed JSON from DB: {json_string_from_db}")
+                continue
+
+        # Return the final Python list of dictionaries.
+        # Flask will handle serializing this correctly.
+        return list_of_python_dicts
+        # --- END OF FIX ---
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
     finally:
-        conn.close()
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
-def get_tourlandingpages_token():
-    conn = mysql.connector.connect(**tours_db_config)
-    """
-    Generate a lightweight tourpage token for caching purposes.
-    Format: <total_count>-<latest_unix_timestamp>
-    """
-    tables = ["items", "tours", "tour_history_images", "tour_videos", "vendors", "tour_guides"]
-    cur = conn.cursor()
-    try:
-        total_count = 0
-        latest_ts = 0
-
-        for table in tables:
-            cur.execute(f"""
-                SELECT COUNT(*), UNIX_TIMESTAMP(COALESCE(MAX(updated_at), '1970-01-01'))
-                FROM tourism_app.{table}
-            """)
-            count, ts = cur.fetchone()
-            total_count += int(count or 0)
-            if ts:
-                latest_ts = max(latest_ts, int(ts))
-
-        return f"{total_count}-{latest_ts}"
-    finally:
-        cur.close()
 
 
 def get_tourlandingpages_version():
-    conn = mysql.connector.connect(**tours_db_config)
-    cur = conn.cursor()
     try:
+        conn = connection_pool.get_connection()
+        cur = conn.cursor()
         cur.execute("SELECT v FROM tourpages_meta WHERE k='landingpage'")
         row = cur.fetchone()
         if not row:
             return None
         (v,) = row
         return str(v) if v is not None else None
+    except MySQLError as e:
+        print(f"❌ DATABASE ERROR: {e}", flush=True)
+        # conn.rollback() is a good practice here, though it happens automatically
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "A database error occurred"}), 500
+    except Exception as e:
+        # Catch other potential errors, like file.save() failing
+        print(f"❌ UNEXPECTED ERROR: {e}", flush=True)
+        if conn:
+            conn.rollback()
+        return jsonify({"error": "An internal server error occurred"}), 500
     finally:
-        cur.close()
+        # 3. The ONLY place you should close the connection.
+        # This guarantees it's always returned to the pool.
+        if conn and conn.is_connected():
+            conn.close()
+            print("🔚 Connection returned to pool.\n", flush=True)
 
 # ---- Redis helpers (non-breaking; tolerant) -------------------------------
 def _safe_decode(v):
@@ -256,237 +327,156 @@ def _default_headers():
         "Expires": "0"
     }
 
-def _get_memory_ver_cached(redis_json, redis_ver):
+# Renamed for clarity, as it now checks all layers.
+def get_current_api_version():
     """
-    Returns the cached backend version for probes.
-    If expired or missing, fetches from DB and updates memory cache.
+    Finds the current API version using a layered cache approach.
+    L1 (Memory) -> L2 (Redis) -> L3 (Database).
+    This function is responsible for populating the caches on a miss.
     """
-    cached = _memory_get(MEM_KEY_JSON)
-    now = time.time()
-    # Proper logging — show actual cached value even if None
-    current_app.logger.info(f"check 3333 cached={cached!r}")
+    # --- STEP 1: Check L1 In-Memory Cache (Fastest) ---
+    mem_ver = _memory_get(MEM_KEY_VER) # Use the specific version key
+    if mem_ver:
+        current_app.logger.debug(f"✅ L1 Cache Hit: Using in-memory ver={mem_ver}")
+        return mem_ver
 
-    # Use the same timestamp key we write below: "cached_at"
-    current_app.logger.info(f"check 3 in cached {isinstance(cached, dict)}")
-    # if cached and isinstance(cached, dict):
-    if cached:
-        cached_at = cached.get("cached_at", 0)
-        current_app.logger.info(f"check 3.1 cached_at < {(now - cached_at) < (VER_CACHE_TTL_MS / 1000)}")
-        if (now - cached_at) < (VER_CACHE_TTL_MS / 1000):
-            mem_ver = cached.get("ver")
-            if mem_ver:
-                current_app.logger.debug(f"Using in-memory cached ver={mem_ver}")
-                return mem_ver
+    # --- STEP 2: L1 Miss, Check L2 Redis Cache ---
+    current_app.logger.info("🟡 L1 Cache Miss. Checking L2 Redis...")
+    redis_ver = redis_client.get(REDIS_KEY_VER)
+    if redis_ver:
+        # redis_ver_str = redis_ver.decode('utf-8') # Redis stores bytes
+        redis_ver_str = redis_ver
+        current_app.logger.info(f"✅ L2 Cache Hit: Found ver={redis_ver_str} in Redis.")
+        # Populate L1 cache for the next request
+        _memory_set(MEM_KEY_VER, redis_ver_str, ttl=VER_CACHE_TTL_MS / 1000)
+        return redis_ver_str
 
-    # Cache miss or expired — determine the version to use
-    ver = redis_ver or get_tourlandingpages_version() or get_tourlandingpages_token()
-
-    # Store a consistent cache shape (body, ver, headers, cached_at)
-    # current_app.logger.debug(f"Using in-memory redis_json ={redis_json}")
-
-    write_both(redis_client, MEM_KEY_VER, redis_json, ver) #1234
-    current_app.logger.info(f"Cached new landing ver={ver}")
-    return ver
-
-#NEED TO CHANGE REFRESH LOGIC
-# ---- Probe: lightweight endpoint to check if client should refresh -----
-# In-memory small cache for backend version to avoid DB hit on every probe
-_VER_CACHE = {"ver": None, "fetched_at_ms": 0}
-VER_CACHE_TTL_MS = 500  # tweakable: how long to reuse the resolved backend version
-
-def _get_backend_ver_cached():
-    """Return backend version string or None on error. Caches for VER_CACHE_TTL_MS ms."""
-    now_ms = int(time.time() * 1000)
-    if _VER_CACHE["ver"] is not None and (now_ms - _VER_CACHE["fetched_at_ms"] < VER_CACHE_TTL_MS):
-        return _VER_CACHE["ver"]
-    
+    # --- STEP 3: L2 Miss, The Last Resort: Database ---
+    current_app.logger.warning("🔴 L2 Cache Miss. Hitting Database for version...")
     try:
-        ver_db = get_tourlandingpages_version()
-        current_app.logger.info(f"db version {ver_db}")
-        token = get_tourlandingpages_token()
-        backend_ver = (ver_db or token or "").strip()
-        backend_ver = backend_ver if backend_ver != "" else None
-        current_app.logger.info(f"backend version {backend_ver}")
-        _VER_CACHE["ver"] = backend_ver
-        _VER_CACHE["fetched_at_ms"] = now_ms
-        return backend_ver
-    except Exception:
-        current_app.logger.exception("Failed to read backend version/token for probe")
-        # Invalidate cache so next probe will try again
-        _VER_CACHE["ver"] = None
-        _VER_CACHE["fetched_at_ms"] = 0
+        db_ver = get_tourlandingpages_version() # Your function that does "SELECT version FROM meta"
+        db_ver_str = str(db_ver) # Ensure it's a string
+
+        current_app.logger.warning(f"✅ DB Fetch OK: Got ver={db_ver_str}. Populating caches...")
+
+        # Populate both L2 and L1 caches
+        redis_client.set(REDIS_KEY_VER, db_ver_str) # No TTL on version in Redis, rely on invalidation
+        _memory_set(MEM_KEY_VER, db_ver_str, ttl=VER_CACHE_TTL_MS / 1000)
+
+        return db_ver_str
+
+    except Exception as e:
+        current_app.logger.error(f"❌ CRITICAL: Failed to fetch version from database: {e}")
+        # Return a default/fallback version or raise an error
+        # Returning None will likely cause the ETag check to fail and trigger a full data refresh, which is safe.
         return None
 
 
-@bp_tourlandingpages.route("/tourlandingpages-probe", methods=["GET"])
-def probe_tourlandingpages():
+def get_full_payload():
     """
-    Lightweight probe endpoint.
-    Query param: ?ver=<client_version>
-    Returns plain text '0' (no update) or '1' (update needed).
-    If server cannot determine backend version, respond '1' (conservative).
-    Response headers: Content-Type text/plain, Cache-Control no-store.
+    Gets the full JSON payload using a layered cache.
+    L1 (Redis) -> L2 (Database).
+    Populates the cache on a miss.
     """
-    client_ver = (request.args.get("ver") or "").strip()
-    current_app.logger.info(f"Probe called, client_ver=%r {client_ver}")
-    backend_ver = _get_backend_ver_cached()
-    redis_json, redis_ver = _redis_get_json_and_ver()
-    current_app.logger.info(f"redis version {redis_ver}")
-    mem_ver = _get_memory_ver_cached(redis_json, redis_ver)
-     # Safe handling if Redis is empty
+    # 1. Check Redis first
+    try:
+        redis_json = redis_client.get(REDIS_KEY_JSON)
+        if redis_json:
+            current_app.logger.info("✅ L1 Payload Hit: Serving from Redis.")
+            return redis_json
+    except Exception as e:
+        current_app.logger.error(f"⚠️  Redis GET failed for payload: {e}")
+
+    # 2. Redis Miss -> Fetch from DB
+    current_app.logger.warning("🔴 L1 Payload Miss. Hitting database for full payload.")
+    try:
+        fresh_json = _fetch_tourlandingpages_json() # Your existing DB fetch function
+
+         # --- ADD THIS LOG ---
+        current_app.logger.info(f"DEBUG: Type from _fetch... is {type(fresh_json)}")
+        if isinstance(fresh_json, list) and len(fresh_json) > 0:
+            current_app.logger.info(f"DEBUG: First item type is {type(fresh_json[0])}")
+        # --------------------
+
+
+        # 3. Populate Redis for the next request
+        try:
+            # We also need the version to store alongside the JSON
+            version = get_current_api_version() # This should be fast now (cached)
+
+            json_string_to_cache = json.dumps(fresh_json)
+
+            _redis_set_json_and_ver(json_string_to_cache, version) # Your helper to write both
+            current_app.logger.info("✅ Populated Redis with fresh payload.")
+        except Exception as e:
+            current_app.logger.error(f"⚠️  Failed to populate Redis cache: {e}")
+
+        response = Response(json_string_to_cache, mimetype='application/json')
     
-    redis_ver = redis_ver or ""
-    current_app.logger.info(f"CHECK BACKEND VER {backend_ver}")
-    current_app.logger.info(f"CHECK MEM VER {mem_ver}")
-    current_app.logger.info(f"CHECK REDIS VER {redis_ver}")
-    if mem_ver == redis_ver and backend_ver == redis_ver:
-        current_app.logger.debug("Probe result: mem_ver=%r update_needed=0 ok", mem_ver)
-        return ("0", 200, {"X-Redis-TTL": str(redis_ver)})
-    if mem_ver != redis_ver and backend_ver == redis_ver:
-        headers = {
-            "X-Redis-TTL": str(mem_ver)
-        }
-        write_both(redis_client, MEM_KEY_JSON, redis_json, ver)
+        # Add the ETag header
+        if version:
+            response.headers['ETag'] = f'"{version}"'
+        return response
+        # return fresh_json
 
-        current_app.logger.debug("Probe result: mem_ver=%r update_needed=0", mem_ver)
-        return ("0", 200, {"X-Redis-TTL": str(redis_ver)})
-    
-    return get_tourlandingpages()
+    except Exception as e:
+        current_app.logger.critical(f"❌ CRITICAL: Failed to fetch payload from database: {e}")
+        return None
 
 
-###########
+# --- The New, Clean API Endpoint ---
 
 @bp_tourlandingpages.route("/tour-landing", methods=["GET"])
 def get_tourlandingpages():
     """
-    Return tour landing pages JSON.
-    Supports:
-      - Force refresh via ?refresh_key=<TOURWISE_FORCE_KEY>
-      - Redis-first caching
-      - File cache fallback
-      - ETag handling for 304 responses
+    Return tour landing pages JSON using a clean, layered caching architecture.
     """
+    current_app.logger.info("➡️ Entered /tour-landing route")
     
-    current_app.logger.info("➡️ Entered /tourlandingpages route")
-
-    # ---- Force refresh check via secret key ----
+    # ---- STEP 1: Handle Force Refresh (Admin override) ----
     force_key = request.args.get("refresh_key")
-    force = force_key == os.getenv("TOURWISE_FORCE_KEY")
-    # ---- Normalize If-None-Match header ----
-    inm_raw = request.headers.get("If-None-Match") or ""
-    update_needed = request.headers.get("If-Update-Needed") or ""
+    force_refresh = force_key and force_key == os.getenv("TOURWISE_FORCE_KEY")
+    if force_refresh:
+        current_app.logger.warning("⚠️  Forced refresh initiated by admin key.")
+        # Invalidate caches and proceed to fetch fresh data
+        _redis_delete() # Your helper to delete Redis keys
+        _memory_delete(MEM_KEY_VER) # Your helper to delete memory key
 
-    inm = inm_raw.strip().strip('"')
-    current_app.logger.info(f"Query params: force={force}, If-None-Match={inm_raw} -> normalized: {inm}")
+    # ---- STEP 2: Perform ETag Validation ----
+    client_etag = request.headers.get('If-None-Match', '').strip('"')
     
-    if inm and update_needed == 0:
-        cached = _memory_get(MEM_KEY_JSON)
-        if cached:
-            current_app.logger.info(f"Memory cache hit {cached}")
-            return cached, 200, cached["headers"]
+    # This one function call hides all the complexity.
+    server_version = get_current_api_version()
 
-        # current_app.logger.info(f"Query params cached: {cached}")
-        redis_json, redis_ver = _redis_get_json_and_ver()
-        if redis_json and redis_ver:
-            # Normalize Redis version (strip quotes, whitespace, newlines)
-            redis_ver_norm = redis_ver.strip().strip('"').strip()
-            current_app.logger.info(f"[tourlandingpages] Redis cache hit ver={redis_ver_norm}")
+    # We only send a 304 if a force refresh is NOT requested.
+    if not force_refresh and client_etag and server_version and client_etag == server_version:
+        current_app.logger.info(f"✅ ETag Match (v{server_version}). Sending 304 Not Modified.")
+        headers = _default_headers()
+        headers['ETag'] = f'"{server_version}"'
+        return "", 304, headers
 
-            redis_ttl = redis_client.ttl(REDIS_KEY_VER)
+    # ---- STEP 3: ETag Mismatch or No ETag -> Get the Full Payload ----
+    current_app.logger.info(f"💨 ETag Mismatch or no ETag provided. Client has '{client_etag}', server has '{server_version}'. Fetching full payload.")
+    
+    payload = get_full_payload()
 
-            # Debug check: log comparison
-            current_app.logger.info(f"Comparing client ETag force = {force} inm = {repr(inm)} vs Redis ETag {repr(redis_ver_norm)}")
-            # Compare
-            if not force and inm and inm == redis_ver_norm:
-                current_app.logger.info("[tourlandingpages] Redis ETag match -> 304 Not Modified")
-                # **Important:** use quotes in returned ETag (HTTP spec)
-                return (
-                    "",  # body
-                    304,  # status code
-                    {
-                        "ETag": f'"{redis_ver_norm}"',
-                        "X-Redis-TTL": str(redis_ttl)
-                    }  # headers
-                )
+     # --- 👇 ADD THESE LOGGING LINES --- 👇 ---
+    current_app.logger.info(f"PAYLOAD TYPE: {type(payload)}")
 
+    if payload is None:
+        current_app.logger.error("❌ No payload available from cache or DB. Returning 503.")
+        return jsonify({"error": "Service temporarily unavailable"}), 503
 
-            # Cache hit but client ETag mismatch or force refresh
-            headers = {
-                "Content-Type": "application/json; charset=utf-8",
-                "ETag": f'"{redis_ver}"',       # frontend can get the version
-                "X-Redis-TTL": str(redis_ttl)   # frontend can get remaining TTL
-            }
-            return (redis_json, 200, headers)
-
-    # ---- File cache fallback ----
-    cached_json, cached_ver = None, None
-    if os.path.exists(CACHE_FILE):
-        current_app.logger.info(f"Using CACHE_FILE={CACHE_FILE}")
-
-        # Read cache JSON and version only once
-        cached_json = _read_file(CACHE_FILE)
-        cached_ver_raw = _read_file(CACHE_FILE + ".ver")
-        cached_ver = cached_ver_raw.strip() if cached_ver_raw else None
-        
-        if cached_json and update_needed == 0:
-            # Store to Redis + memory cache
-            write_both(redis_client, MEM_KEY_JSON, cached_json, cached_ver or ver)
-            return cached_json
-
-    # ---- Fetch backend version/token ----
-    ver_db = get_tourlandingpages_version()
-    token = get_tourlandingpages_token()
-    ver = (ver_db or token or "").strip()
-    current_app.logger.info(f"DB version normalized: {repr(ver)}")
-
-    # ---- 304 check for file cache or fresh fetch ----
-    if not force and inm and inm == ver:
-        current_app.logger.info("ETag match → returning 304 Not Modified")
-        return ("", 304, {"ETag": ver})
-
-    if not force and cached_json and cached_ver == ver:
-        current_app.logger.info(f"File cache hit → returning cached JSON {cached_json}")
-        return (cached_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
-
-    # ---- Fetch fresh JSON from DB ----
-    current_app.logger.info("Cache miss or force → fetching fresh JSON from DB")
-
-    fresh_json = _fetch_tourlandingpages_json()
-    current_app.logger.info(f"fetched fresh JSON = {fresh_json}")    
-
-    # ---- Optionally clear Redis on force refresh ----
-    if force:
-        try:
-            _redis_delete()
-        except Exception:
-            pass
-    if force:
-        _memory_delete("landing:json")
-            
-    # "X-Redis-TTL": str(redis_ttl)
-    # ---- Write to file cache ----
-    if CACHE_FILE:
-        current_app.logger.info(f"Writing fresh JSON + version to file cache -> {CACHE_FILE}")
-        try:
-            _write_atomic(CACHE_FILE, fresh_json)
-            _write_atomic(CACHE_FILE + ".ver", ver + "\n")
-            st = os.stat(CACHE_FILE)
-            write_both(redis_client, MEM_KEY_JSON, fresh_json, ver)
-            current_app.logger.info(f"File cache written OK: size={st.st_size}")
-        except Exception as e:
-            current_app.logger.exception(f"Failed writing file cache: {e}")
-
-    # ---- Update Redis (best-effort) ----
-    try:
-        _redis_set_json_and_ver(fresh_json, ver)
-    except Exception:
-        pass  # already logged by helper
-
-    current_app.logger.info("Returning fresh JSON with ETag")
-    # return (fresh_json, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
-    fresh_data = json.loads(fresh_json) if isinstance(fresh_json, str) else fresh_json
-    return (fresh_data, 200, {"Content-Type": "application/json; charset=utf-8", "ETag": ver})
-
+    # ---- STEP 4: Return the Fresh Payload ----
+    # The server_version should already be cached from the ETag check
+    final_version = server_version or get_current_api_version()
+    headers = _default_headers()
+    headers['ETag'] = f'"{final_version}"'
+    
+    # The payload from Redis/DB might be a string, needs to be returned as a Flask Response
+    # return Response(payload, mimetype='application/json', headers=headers)
+    # return payload
+    return jsonify(payload)
 
 
 #############
