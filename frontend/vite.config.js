@@ -1,41 +1,4 @@
 
-// import { defineConfig } from 'vite';
-// import react from '@vitejs/plugin-react';
-// import { URL, fileURLToPath } from 'url'; // <-- Use the modern URL API
-
-// export default defineConfig(({ mode }) => {
-//   const isProd = mode === 'production';
-
-//   return {
-//     base: isProd ? '/tourism-analytics/' : '/tourism-analytics/',
-//     plugins: [react()],
-    
-//     // --- THE NEW, ROBUST ALIAS CONFIG ---
-//     resolve: {
-//       alias: [
-//         { 
-//           find: '@', 
-//           replacement: fileURLToPath(new URL('./src', import.meta.url)) 
-//         },
-//         { 
-//           find: '@LandingPage', 
-//           replacement: fileURLToPath(new URL('./src/features/LandingPage', import.meta.url)) 
-//         }
-//       ]
-//     },
-//     // ------------------------------------
-
-//     server: {
-//       host: true,
-//       port: 5173,
-//       watch: {
-//         usePolling: true,
-//         interval: 1000,
-//       },
-//     },
-//   };
-// });
-
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { URL, fileURLToPath } from 'url';
