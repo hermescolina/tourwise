@@ -25,7 +25,6 @@ tours_db_config = {
     "port": int(os.getenv("TOUR_DB_PORT", "3306")),
 }
 
-# CACHE_FILE = os.getenv("tourlandingpages_CACHE", "/var/lib/tourwise/tourlandingpages.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
 # Redis keys & TTL
@@ -49,10 +48,10 @@ memory_cache = memoryCache(default_ttl=MEMORY_CACHE_TTL)
 VER_CACHE_TTL_MS = 500  # tweakable: 0.5 sec
 
 # 🔎 boot diagnostics (prints once at import)
-print(f"[tourlandingpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
+# print(f"[tourlandingpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
 # print(f"[tourlandingpages] tourlandingpages_CACHE={CACHE_FILE}", flush=True)
-print(f"[tourlandingpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
-print(f"[tourlandingpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
+# print(f"[tourlandingpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
+# print(f"[tourlandingpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
 
 #-------global helpers-------------------------------------------------------
 def _default_headers():
@@ -70,6 +69,47 @@ def _normalize_body(maybe_str):
             # If the body is plain string (not JSON), keep as string
             return maybe_str
     return maybe_str
+
+def invalidate_cache_on_cud() -> str | None:
+    """
+    1. Re-fetches the latest full list of tours from the DB.
+    2. Retrieves the latest ETag (version) set by the MySQL trigger.
+    3. Atomically updates both the JSON payload and the ETag in Redis.
+    """
+    try:
+        # 1. Fetch the latest version set by the MySQL trigger
+        # We assume this function is fast and reads from a separate version table.
+        new_version = get_latest_db_version() 
+        
+        if not new_version:
+             print("⚠️ WARN: Could not retrieve new version from DB tracker. Aborting Redis SET.")
+             return None
+
+        # 2. Fetch the entire, fresh data payload from the primary DB
+        # This function must query the DB and return the Python list/dict structure.
+        fresh_data = _fetch_tourlandingpages_json() 
+
+        # 3. Serialize the fresh data
+        json_string = json.dumps(fresh_data)
+
+        # 4. Use a Redis Pipeline for atomic update of two keys
+        pipe = redis_client.pipeline()
+        
+        # Set the NEW VERSION/ETag (This is the cache invalidator)
+        pipe.set(REDIS_KEY_VER, new_version)
+        
+        # Set the NEW DATA payload
+        pipe.set(REDIS_KEY_JSON, json_string)
+        
+        # Execute both commands simultaneously
+        pipe.execute() 
+        
+        print(f"✅ Cache invalidated and updated. New ETag: {new_version}")
+        return new_version
+        
+    except Exception as e:
+        print(f"❌ CRITICAL: Failed to perform Redis SET after DB change: {e}")
+        return None
 
 def extract_data_from_redis_json(redis_json_string: str) -> Any:
     """
@@ -113,51 +153,6 @@ async def populate_redis_from_db():
     await redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
 
 
-# (Assuming your other helper functions like _normalize_body, _default_headers, etc. are defined)
-# A simpler, corrected write_both
-def write_both(redis_client, json_payload_string: str, ver: str):
-    """Writes a JSON string to Redis and a decoded object to memory."""
-    try:
-        # 1. Write the already-serialized string to Redis
-        redis_client.setex(REDIS_KEY_JSON, REDIS_TTL, json_payload_string)
-        redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
-
-        # 2. Decode the string into a Python object for the memory cache
-        python_object = json.loads(json_payload_string)
-        _memory_set(MEM_KEY_JSON, python_object, ttl=VER_CACHE_TTL_MS / 1000)
-    except Exception as e:
-        current_app.logger.warning(f"[write_both] Cache write error: {e}")
-
-# ---- File helpers ---------------------------------------------------------
-def _read_file(path: str):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
-
-def _normalize_content_for_write(content):
-    if hasattr(content, "get_data"):
-        try:
-            return content.get_data(as_text=True)
-        except TypeError:
-            return content.get_data().decode("utf-8", errors="replace")
-    if hasattr(content, "text") and isinstance(content.text, str):
-        return content.text
-    if isinstance(content, (bytes, bytearray)):
-        return content.decode("utf-8", errors="replace")
-    if isinstance(content, (dict, list)):
-        return json.dumps(content, ensure_ascii=False)
-    return str(content)
-
-def _write_atomic(path: str, content) -> None:
-    text = _normalize_content_for_write(content)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
-
 # ---- DB helpers -----------------------------------------------------------
 def _fetch_tourlandingpages_json():
     
@@ -174,18 +169,6 @@ def _fetch_tourlandingpages_json():
         if not rows:
             raise RuntimeError("vw_tour_landing_page_json returned empty payload")
 
-        # result = [r[0] for r in rows]
-        # list_of_json_strings = [r[0] for r in rows]
-         # 2. Join these strings with a comma, then wrap them in array brackets `[]`.
-        #    This manually constructs a valid JSON array string.
-        # json_array_string = f"[{','.join(list_of_json_strings)}]"
-        
-        # 3. Return this final, correct string.
-        #    DO NOT call json.dumps() again.
-        # return json_array_string
-        # return json.dumps(result, ensure_ascii=False)
-         # --- THE CORRECT FLASK-FRIENDLY FIX ---
-        
         list_of_python_dicts = []
         for row in rows:
             json_string_from_db = row[0]
@@ -428,10 +411,11 @@ def get_full_payload():
 
 @bp_tourlandingpages.route("/tour-landing", methods=["GET"])
 def get_tourlandingpages():
+    
     """
     Return tour landing pages JSON using a clean, layered caching architecture.
     """
-    current_app.logger.info("➡️ Entered /tour-landing route")
+    print("➡️ Entered /tour-landing route",flush=True)
     
     # ---- STEP 1: Handle Force Refresh (Admin override) ----
     force_key = request.args.get("refresh_key")
@@ -447,6 +431,9 @@ def get_tourlandingpages():
     
     # This one function call hides all the complexity.
     server_version = get_current_api_version()
+
+    # Log the state of the variables used in the comparison (client vs. server)
+    print(f"DEBUG ETAG CHECK: force_refresh={force_refresh}, client_etag='{client_etag}', server_version='{server_version}'", flush=True)
 
     # We only send a 304 if a force refresh is NOT requested.
     if not force_refresh and client_etag and server_version and client_etag == server_version:
@@ -472,24 +459,8 @@ def get_tourlandingpages():
     final_version = server_version or get_current_api_version()
     headers = _default_headers()
     headers['ETag'] = f'"{final_version}"'
-    
     # The payload from Redis/DB might be a string, needs to be returned as a Flask Response
     # return Response(payload, mimetype='application/json', headers=headers)
     # return payload
-    return jsonify(payload)
-
-
-#############
-
-
-@bp_tourlandingpages.route("/file", methods=["GET"])
-def get_tourlandingpages_file():
-    if not os.path.exists(CACHE_FILE):
-        abort(404, description="Cache file not found")
-    return send_file(CACHE_FILE, mimetype="application/json")
-
-@bp_tourlandingpages.route("/raw", methods=["GET"])
-def get_tourlandingpages_raw():
-    fresh = _fetch_tourlandingpages_json()
-    return fresh, 200, {"Content-Type": "application/json; charset=utf-8"}
+    return jsonify(payload), 200, headers
 

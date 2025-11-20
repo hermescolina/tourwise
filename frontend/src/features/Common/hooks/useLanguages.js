@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 // Assuming you create a new service function for language data
-import { fetchLanguageConfig } from '@LandingPage/services/languageService'; 
+import { fetchLanguageConfig } from '@Common/services/config/languageService'; 
 
 /**
  * Custom hook to fetch language configuration and manage the active language.

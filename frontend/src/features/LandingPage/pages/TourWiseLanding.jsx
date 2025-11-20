@@ -1,84 +1,31 @@
-import {  React }  from 'react';
-import Navbar from '@LandingPage/components/Navbar';
-// import LanguageSelector from '@LandingPage/components/LanguageSelector'; 
-import styles from '@LandingPage/CSS/TestPage.module.css'; 
-// import styles from '@LandingPage/CSS/TourWiseLanding.module.css'; 
-import { useTourData } from '@LandingPage/hooks/useTourData'; 
-import  useNavLinks  from '@LandingPage/hooks/useNavLinks'; 
-import React from 'react';
+import React,{ useEffect, useRef, useState } from 'react';
 
-
-const MOCK_NAV_ITEMS = [
-    { title: "Tours", path: "/tours" },
-    { title: "Hotels", path: "/hotels" },
-    { title: "Cars", path: "/cars" },
-    { title: "Contact", path: "/contact" },
-];
-
-const { 
-        menuItems: navLinks, 
-        isLoading: navLoading 
-    } = useNavLinks(); // <--- This call should be inside the function!
+import Navbar from '@Common/components/Navbar';
+import LanguageSelector from '@Common/components/LanguageSelector'; 
+import TourDisplay from '@LandingPage/components/TourDisplay';
+import HeroSlide from '@LandingPage/components/HeroSlide';
+import styles from '@LandingPage/CSS/TourWiseLanding.module.css'; 
 
 export default function TourWiseLanding() {
-  // --- STATE MANAGEMENT ---
-    // ⭐️ 1. Call the hook to fetch tour data ⭐️
-    const { 
-        items: tourItems, 
-        isLoading: toursLoading, 
-        error: toursError 
-    } = useTourData();
-    
-    // Simulate a complex piece of content for the main body
-    const [activeTab, setActiveTab] = React.useState('Tours');
+    return (
+        <>
+        <div className={styles.tourwiseLanding}>
+            <Navbar
+                rightSlot={<LanguageSelector/>}
+            />
 
-    // Display a full-page loading message if data is not ready
-    if (toursLoading) {
-        return <div className={styles.fullPageLoader}>Loading Tour Data...</div>;
+            <div className={styles.movingGroup}>
+                    <HeroSlide styles={styles} imageClass={styles.heroImage1} />
+                    <HeroSlide styles={styles} imageClass={styles.heroImage2} />
+                    <HeroSlide styles={styles} imageClass={styles.heroImage3} />
+            </div>
+
+            <TourDisplay
+                styles={styles}
+            />
+        </div>
+        </>
+    );
+
     }
 
-    return (
-        <div>
-            <Navbar 
-                // ⭐️ RESTORE LINKS: Pass the mock links back in ⭐️
-                menuItems={MOCK_NAV_ITEMS} 
-                // rightSlot={<LanguageSelector />} 
-            /> 
-            
-            <main className={styles.content}>
-                {/* ... (rest of your page content, tabs, and status box) ... */}
-                <h1>Tour Data Integration Test Page</h1>
-                
-                {/* Tab Navigation (Optional, keeps the UI structured) */}
-                {/* ... (Your tab navigation component/JSX goes here) ... */}
-
-                <div className={styles.statusBox}>
-                    <h2>Status Check: Tour Data</h2>
-                    
-                    {/* ⭐️ 2. Conditional rendering based on hook results ⭐️ */}
-                    {toursError && (
-                        <p className={styles.errorText}>
-                            ❌ Error loading tours: {toursError.message || toursError}
-                        </p>
-                    )}
-                    
-                    {!toursError && (
-                        <>
-                            <p>✅ **Hook Status:** Successfully connected to API.</p>
-                            <p>📦 **Total Tours Fetched:** **{tourItems.length}**</p>
-                            <p>🔍 **First Tour Title:** {tourItems[0]?.tour?.title || 'N/A'}</p>
-                            <p>✅ **Test Goal:** Data displayed below comes from the Flask Microservice.</p>
-                        </>
-                    )}
-                    
-                    {/* ⭐️ 3. Display raw fetched data for visual confirmation ⭐️ */}
-                    <hr/>
-                    <div className={styles.dataDisplay}>
-                        <h3>Raw Data Preview (First 3 Items)</h3>
-                        <pre>{JSON.stringify(tourItems.slice(0, 3), null, 2)}</pre>
-                    </div>
-                </div>
-            </main>
-        </div>
-    );
-};

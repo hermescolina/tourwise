@@ -1,13 +1,26 @@
 // src/components/Navbar.jsx
 import React, { useState, useCallback } from 'react';
-import useClickOutside from '@LandingPage/hooks/useClickOutside';
-import { useNavLinks } from '@LandingPage/hooks/useNavLinks';
-import styles from '@LandingPage/CSS/Navbar.module.css';
+import useClickOutside from '@Common/hooks/useClickOutside';
+import { useNavLinks } from '@Common/hooks/useNavLinks';
+import styles from '@Common/CSS/Navbar.module.css';
 
-// Accept an additional prop for a custom component
+// ⚠️ Define the base path here (or import it from a config file)
+const APP_BASENAME = '/tourism-analytics'; 
+
+// Helper function to create the full path
+const getFullPath = (path) => {
+    // Ensure the path starts with the basename and includes only one slash in between
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    
+    // Concatenate and ensure no double slashes, handling the root path gracefully
+    if (normalizedPath === '/') {
+        return APP_BASENAME + '/';
+    }
+    return APP_BASENAME + normalizedPath;
+};
+
 const Navbar = ({ rightSlot: RightComponent = null }) => {
-    // 1. State: Tracks if the mobile menu is open
-
+    
     const {
         menuItems,
         isLoading,
@@ -16,30 +29,27 @@ const Navbar = ({ rightSlot: RightComponent = null }) => {
     
     const [menuOpen, setMenuOpen] = useState(false);
 
-    // 2. Callback: Closes the menu, memoized for hook stability
     const closeMenu = useCallback(() => {
         setMenuOpen(false);
     }, []);
   
-    // 3. Hook Call: Returns the ref for the menu container
     const dropdownRef = useClickOutside(closeMenu);
 
-    // Handler for the hamburger button click
     const toggleMenu = () => {
         setMenuOpen(prev => !prev);
     };
+
+    // If using the a tag, you must use the full path constructed with the basename.
+    // If using Link from react-router-dom, it handles the basename automatically,
+    // but since you are using <a> tags, manual construction is required.
 
     return (
         <header className={styles.navbar}> 
             <div className={styles.navbarContainer}>
                 
-                {/* 1. Logo and main brand area */}
-                <a href="/" className={styles.navbarLogo}>TourWise 🌍</a>
+                {/* 1. Logo: Ensure the root link uses the basename */}
+                <a href={APP_BASENAME + '/'} className={styles.navbarLogo}>TourWise 🌍</a>
 
-                {/* ⭐️ FIX: HAMBURGER BUTTON IS MOVED HERE ⭐️
-                   It stays inside navbarContainer but outside the dynamicContentWrapper 
-                   for stable positioning next to the logo on mobile. 
-                */}
                 <button 
                     className={styles.menuToggle}
                     onClick={toggleMenu}
@@ -48,29 +58,27 @@ const Navbar = ({ rightSlot: RightComponent = null }) => {
                     {menuOpen ? 'X' : 'Menu'}
                 </button>
 
-                {/* ⭐️ 2. DYNAMIC CONTENT WRAPPER: Now only holds the links and the slot ⭐️ */}
                 <div className={styles.dynamicContentWrapper}> 
-
-                    {/* The Collapsible Menu List (Primary Navigation) */}
                     <div 
                         id="main-menu"
-                        ref={dropdownRef} // Attached to the slide-out element
+                        ref={dropdownRef}
                         className={`${styles.navbarMenuList} ${menuOpen ? styles.isOpen : ''}`}
                     >
-                        {/* Menu item mapping (using a safe map over the prop) */}
+                        {/* Menu item mapping */}
                         {menuItems.map((item) => (
                             <a 
                                 key={item.path} 
-                                href={item.path} 
+                                // ⚠️ FIX: Use the helper to prepend the basename
+                                href={getFullPath(item.path)} 
                                 className={styles.navbarItem} 
-                                onClick={closeMenu} // Closes the mobile menu when navigating
+                                onClick={closeMenu}
                             >
                                 {item.title}
                             </a>
                         ))}
                     </div>
 
-                    {/* RENDER THE RIGHT SLOT (Language Selector, etc.) */}
+                    {/* RENDER THE RIGHT SLOT */}
                     {RightComponent && (
                         <div className={styles.navbarRightSlot}>
                             {RightComponent} 

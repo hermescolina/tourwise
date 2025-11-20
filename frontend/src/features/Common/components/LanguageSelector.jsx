@@ -1,7 +1,7 @@
 // src/components/LanguageSelector.jsx
 import React, {useCallback} from 'react';
-import { useLanguages } from '@LandingPage/hooks/useLanguages'; // ⭐️ UNCOMMENT THE HOOK ⭐️
-import styles from '@LandingPage/CSS/Navbar.module.css';
+import { useLanguages } from '@Common/hooks/useLanguages'; // ⭐️ UNCOMMENT THE HOOK ⭐️
+import styles from '@Common/CSS/Navbar.module.css';
 
 // Corrected Code for LanguageSelector Component
 
@@ -15,7 +15,6 @@ const LanguageSelector = () => {
         error               
     } = useLanguages();
 
-    console.log("languages",language)
     
     // 2. Define the handler, correctly using the 'setLanguage' from above
     const handleLanguageChange = useCallback((event) => {

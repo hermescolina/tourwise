@@ -1,11 +1,3 @@
-import Swal from 'sweetalert2';
-import { createContext, useContext, useState } from 'react';
-import { apiBaseTour } from '@/config';
-
-const CartContext = createContext();
-
-export function CartProvider({ children }) {
-    const [cartItems, setCartItems] = useState([]);
 
 const addToCart = async (item) => {
   try {
@@ -132,33 +124,6 @@ const loadCart = async (userId = 1) => {
     }
 };
 
-
-
-// const clearCart = async (userId, delete_all = false) => {
-//     setCartItems([]);
-
-//     try {
-//         const response = await fetch(`${apiBaseTour}/api/cr/clear-cart`, {
-//             method: 'DELETE',
-//             headers: {
-//                 'Content-Type': 'application/json',
-//             },
-//             body: JSON.stringify({ user_id: userId, delete_all }) // ✅ Pass user_id in request body
-//         });
-
-//         if (!response.ok) {
-//             throw new Error(`Server returned status ${response.status}`);
-//         }
-
-//         const data = await response.json();
-//         console.log('Cart cleared:', data.message || data);
-
-//     } catch (error) {
-//         console.error('Remove from cart error:', error);
-//         alert('An error occurred while clearing the cart.');
-//     }
-// };
-
 const clearCart = async (userId, delete_all = false) => {
     setCartItems([]);
 
@@ -186,16 +151,3 @@ const clearCart = async (userId, delete_all = false) => {
         alert('An error occurred while clearing the cart.');
     }
 };
-
-
-
-return (
-    <CartContext.Provider value={{ cartItems, addToCart, removeFromCart, loadCart, clearCart }}>
-        {children}
-    </CartContext.Provider>
-);
-}
-
-export const useCart = () => useContext(CartContext);
-
-export { CartContext };

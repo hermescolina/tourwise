@@ -91,6 +91,7 @@ def update_tour_in_db_by_id(item_id, item_type, data):
     )
 
     conn.commit()
+    invalidate_cache_on_cud()
     cursor.close()
     conn.close()
 
@@ -118,7 +119,9 @@ def post_tour_tips_from_db_by_slug(slug,tips):
             INSERT into tours value()  
         """
         cur.execute(sql, (tips_json, slug))
+
         conn.commit()
+        invalidate_cache_on_cud()
 
         if cur.rowcount == 0:
             return jsonify({"error": "tour not found (slug) or no change"}), 404
@@ -191,6 +194,8 @@ def update_tour_tips_by_slug(slug, tips):
             (tips_json, tour_id, item_type),
         )
         conn.commit()
+        invalidate_cache_on_cud()
+        
         affected = cur.rowcount
         cur.close()
         return affected

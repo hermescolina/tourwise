@@ -1,17 +1,24 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+// import { Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 // --- THE CRITICAL IMPORT ---
-// import TourWiseLanding from '@LandingPage/pages/TourWiseLanding.jsx';
-import TestPage from '@LandingPage/pages/TestPage';
-// import TourWiseLanding from './features/LandingPage/pages/TourWiseLanding.jsx';
+// import TestPage from '@LandingPage/pages/TestPage';
+import TourWiseLanding from '@LandingPage/pages/TourWiseLanding.jsx';
+import TourCards from '@TourCardsPage/pages/TourCards.jsx';
+import TourCardsOld from '@TourCardsPage/pages/TourCardsOld.jsx';
 
 function App() {
   return (
-    <Routes>
-      {/* <Route path="/" element={<TourWiseLanding />} /> */}
-      <Route path="/TestPage" element={<TestPage />} />
-    </Routes>
+      <Routes>
+        <Route 
+          path="/" 
+          element={<TourWiseLanding />} 
+          key={location.pathname + location.search}
+        />
+        <Route path="/tour-cards" element={<TourCards />} />
+        <Route path="/tour-cards-old" element={<TourCardsOld />} />
+      </Routes>
   );
 }
 

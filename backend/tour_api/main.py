@@ -260,6 +260,7 @@ def add_tour():
             ),
         )
         db.commit()
+        invalidate_cache_on_cud()
 
         # ✅ Try to auto-post to Facebook
         try:
@@ -702,6 +703,7 @@ def update_tour(slug):
                 )
 
             db.commit()
+            invalidate_cache_on_cud()
 
         db.close()
         return jsonify({"message": "Tour updated successfully"})
@@ -744,6 +746,7 @@ def upload_history_image(slug):
             )
 
             db.commit()
+            invalidate_cache_on_cud()
 
         db.close()
         return jsonify({"message": "History image uploaded successfully"})
@@ -813,6 +816,7 @@ def update_history_image(image_id):
         # 2. Commit ONCE, after all the work is queued up.
         if changes_made:
             conn.commit()
+            invalidate_cache_on_cud()
             print("✅ Commit successful.", flush=True)
             # Check if the ID actually existed
             if cursor.rowcount == 0:
@@ -850,6 +854,7 @@ def delete_history_image(image_id):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM tour_history_images WHERE id=%s", (image_id,))
         conn.commit()
+        invalidate_cache_on_cud()
         cursor.close()
         conn.close()
         return jsonify({"message": "Image deleted successfully"})
@@ -964,6 +969,7 @@ def save_video_embed(slug):
                 (tour_id, video_id, caption, category, tour_day),
             )
             db.commit()
+            invalidate_cache_on_cud()
             print("✅ Video inserted successfully.")
 
         db.close()
@@ -1051,6 +1057,7 @@ def delete_tour_video(slug, video_id):
                 (video_id, item_id),
             )
             db.commit()
+            invalidate_cache_on_cud()
 
         db.close()
         return jsonify({"message": "Video deleted"}), 200
@@ -1091,6 +1098,7 @@ def delete_history_image_by_slug(slug, image_id):
 
         cursor.execute("DELETE FROM tour_history_images WHERE id = %s", (image_id,))
         conn.commit()
+        invalidate_cache_on_cud()
         cursor.close()
         conn.close()
         return jsonify({"message": "Image deleted successfully"})
@@ -1139,6 +1147,7 @@ def update_tour_video(slug, video_id):
                 (caption, category, tour_day, video_id),
             )
             db.commit()
+            invalidate_cache_on_cud()
         db.close()
         return jsonify({"message": "Video updated successfully"})
     except MySQLError as e:
@@ -1316,6 +1325,8 @@ def book_tour():
         )
 
         conn.commit()
+        invalidate_cache_on_cud()
+
         booking_id = cursor.lastrowid
         print(f"🆔 Generated token for booking {booking_id}: {confirmation_token}")
 
@@ -1356,6 +1367,7 @@ def delete_tour(slug):
         print("DELETE FROM items WHERE slug = %s", (slug,),flush=True)
         cursor.execute("DELETE FROM items WHERE slug = %s", (slug,))
         conn.commit()
+        invalidate_cache_on_cud()
         cursor.close()
         conn.close()
         return jsonify({"message": "Tour deleted successfully 111"})
@@ -1478,8 +1490,8 @@ def update_tour_itinerary(slug):
         if not isinstance(data.get("tour_itinerary", []), list):
             return jsonify({"error": "Invalid itinerary format"}), 400
 
-        # ✅ Update using ID instead of slug
-        update_tour_in_db_by_id(tour_id, item_type, data)
+        # ✅ Update using ID instead of slug 
+        update_tour_in_db_by_id(tour_id, item_type, data) 
         return jsonify({"message": "Tour updated"})
     except MySQLError as e:
         print(f"❌ DATABASE ERROR: {e}", flush=True)

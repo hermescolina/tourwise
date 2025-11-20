@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchNavLinks } from '@LandingPage/services/navlinkService';
+import { fetchNavLinks } from '@Common/services/config/navlinkService';
 
 /**
  * Custom hook to fetch navigation links from the backend API.

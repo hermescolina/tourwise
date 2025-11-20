@@ -10,9 +10,7 @@ const NAV_LINKS_URL = `${apiBaseTour}/api/config/navbar/links`;
 export const fetchNavLinks = async () => {
     // ... your existing correct implementation
     try {
-        console.log("check before nav fetch")
         const response = await fetch(NAV_LINKS_URL);
-        console.log("check after nav fetch")
         
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status} from ${NAV_LINKS_URL}`);

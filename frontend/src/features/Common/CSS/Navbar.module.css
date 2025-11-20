@@ -42,7 +42,10 @@
     font-size: 1.5rem;
     font-weight: bold;
     text-decoration: none;
-    color: inherit;
+    /* color: inherit; */
+    color: #5a4f69;
+    margin-left: -20px !important;
+    padding-right: 20px;
 }
 
 /* ==================================================================== */
@@ -125,6 +128,7 @@
         color: white;
         padding: 0.3rem 0.6rem;
         z-index: 1001;
+        /* margin-right: -40px; */
     }
 
     /* Menu is hidden and positioned off-screen initially */

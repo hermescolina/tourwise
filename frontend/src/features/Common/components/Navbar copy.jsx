@@ -1,11 +1,19 @@
 // src/components/Navbar.jsx
 import React, { useState, useCallback } from 'react';
-import useClickOutside from '@LandingPage/hooks/useClickOutside';
-import styles from '@LandingPage/CSS/Navbar.module.css';
+import useClickOutside from '@Common/hooks/useClickOutside';
+import { useNavLinks } from '@Common/hooks/useNavLinks';
+import styles from '@Common/CSS/Navbar.module.css';
 
 // Accept an additional prop for a custom component
-const Navbar = ({ menuItems = [], rightSlot: RightComponent = null }) => {
+const Navbar = ({ rightSlot: RightComponent = null }) => {
     // 1. State: Tracks if the mobile menu is open
+
+    const {
+        menuItems,
+        isLoading,
+        error
+    }  = useNavLinks();
+    
     const [menuOpen, setMenuOpen] = useState(false);
 
     // 2. Callback: Closes the menu, memoized for hook stability

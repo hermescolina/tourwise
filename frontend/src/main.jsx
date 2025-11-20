@@ -1,45 +1,3 @@
-// // src/main.jsx
-
-// import React from 'react';
-// import ReactDOM from 'react-dom/client';
-// import { BrowserRouter as Router } from 'react-router-dom';
-// import App from './App.jsx'; // Use a simple relative import for now
-// import { CartProvider } from '@LandingPage/components/CartContext';
-
-// // Get the root DOM element
-// const root = ReactDOM.createRoot(document.getElementById('root'));
-
-// // Render the application, wrapping App in the Router
-// root.render(
-//   <React.StrictMode>
-//     <Router basename="/tourism-analytics/">
-//       <App />
-//     </Router>
-//   </React.StrictMode>
-// );
-
-// src/main.jsx
-
-// import React from 'react';
-// import ReactDOM from 'react-dom/client';
-// import { BrowserRouter as Router } from 'react-router-dom';
-// import App from './App.jsx'; // Use a simple relative import for now
-// // import { CartProvider } from '@LandingPage/components/CartContext.jsx';
-// import { CartProvider } from './features/LandingPage/components/CartContext.jsx';
-
-// // Get the root DOM element
-// const root = ReactDOM.createRoot(document.getElementById('root'));
-
-// // Render the application, wrapping App in the Router
-// root.render(
-//     <React.StrictMode>
-//       <CartProvider>
-//         <App />
-//       </CartProvider>
-//   </React.StrictMode>
-// );
-
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter as Router } from 'react-router-dom';
@@ -47,7 +5,7 @@ import { BrowserRouter as Router } from 'react-router-dom';
 import App from './App.jsx';
 // Use the reliable relative path for now
 // import { CartProvider } from './features/LandingPage/components/CartContext.jsx';
-import { CartProvider } from '@LandingPage/components/CartContext.jsx';
+import { CartProvider } from '@Common/components/CartContext.jsx';
 
 // Get the root DOM element
 const root = ReactDOM.createRoot(document.getElementById('root'));

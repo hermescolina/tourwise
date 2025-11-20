@@ -52,8 +52,16 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('./src', import.meta.url)) 
       },
       { 
+        find: '@Common', 
+        replacement: fileURLToPath(new URL('./src/features/Common', import.meta.url)) 
+      },
+      { 
         find: '@LandingPage', 
         replacement: fileURLToPath(new URL('./src/features/LandingPage', import.meta.url)) 
+      },
+      { 
+        find: '@TourCardsPage', 
+        replacement: fileURLToPath(new URL('./src/features/TourCardsPage', import.meta.url)) 
       }
     ]
   },

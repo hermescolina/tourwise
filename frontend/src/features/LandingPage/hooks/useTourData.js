@@ -1,58 +1,145 @@
-import { useState, useEffect } from 'react';
+// src/hooks/useTourData.js
+import { useState, useEffect, useRef } from 'react';
+import { apiBaseTour } from '@/config'; 
+import { parseAndNormalizeItems } from '@LandingPage/utilities/dataProcessor'; 
+import { performNetworkFetch } from '@LandingPage/services/config/tourdataService'; 
 
-// 1. Import our new config file to get the API URL.
-import { apiBaseTour, frontendBase } from '@/config';
 
-// We are temporarily NOT importing the cache helpers.
+// Import necessary functions from your cache service
+// Assuming the path is correct relative to the hook's location:
+import { 
+    TOUR_LANDING_CACHE_KEY, 
+    cacheSet, 
+    cacheGet, 
+} from '@Common/services/cache/cacheService'; 
 
-export const useTourData = () => {
-  const [items, setItems] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+/**
+ * Custom Hook for fetching tour data using an ETag/304 (Redis-SET-driven) cache strategy (SWR pattern).
+ * @returns {{ items: Array, isLoading: boolean, error: Error | null }}
+ */
+export function useTourData() {
+    const isMountedRef = useRef(false); // ✨ NEW: Ref to track initial mount cycle
+    const [items, setItems] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState(null);
 
-  useEffect(() => {
-    const fetchOnly = async () => {
-      console.log("HOOK: Starting REAL data fetch...");
-      setIsLoading(true);
-      setError(null);
+    const currentControllerRef = useRef(null);
+    const currentReqIdRef = useRef(0);
+  
+    // Inside fetchTourData in your useTourData.js hook
 
-      try {
-        const apiUrl = apiBaseTour;
-        console.log(`HOOK: Fetching from API endpoint: ${apiUrl}/api/tl/tour-landing`);
+    const fetchTourData = async () => {
+        // ... (State setup, cache retrieval, clientVer, headers, AbortController setup) ...
+        const reqId = ++currentReqIdRef.current;
+        let cachedEntry = cacheGet(TOUR_LANDING_CACHE_KEY); 
+        const clientVer = cachedEntry?.etag;
         
-        // 2. This is the real network request.
-        const response = await fetch(`${apiUrl}/api/tl/tour-landing`);
-
-        // 3. Check if the server responded with an error (like 404 or 500).
-        if (!response.ok) {
-          throw new Error(`Network response was not ok: ${response.status} ${response.statusText}`);
+        // --- Step 1: Pre-fetch Setup ---
+        const headers = {};
+        if (clientVer) {
+            headers['If-None-Match'] = clientVer;
         }
+        const controller = new AbortController();
+        currentControllerRef.current = controller;
+        const signal = controller.signal;
         
-        // --- THE FIX ---
-        // 1. Get the data. We expect it to be a string that CONTAINS JSON.
-        const jsonString = await response.json();
-        console.log("HOOK: Received a JSON-encoded string from backend.");
+        // Note: If you are using probeBackend(), you need to call it here to get 'updateNeeded'
+        // Assuming for simplicity that updateNeeded is always [0, ...] for now,
+        // or you call probeBackend before this step.
+        const updateNeeded = [0]; 
 
-        // 2. Parse that string a second time to get the actual array.
-        const data = JSON.parse(jsonString);
-        console.log("HOOK: Successfully double-parsed to get the real data array.");
-        // --- END OF FIX ---
-        // 5. Update our component's state with the real data.
-        setItems(data);
+        // --- Step 2: Execute Network Fetch and Handle Side Effects ---
+        try {
+            const { status, data } = await performNetworkFetch({ 
+                apiBaseTour, 
+                headers, 
+                signal, 
+                reqId, 
+                currentReqIdRef, 
+                cachedEntry, 
+                updateNeeded 
+            });
 
-      } catch (err) {
-        console.error("HOOK: Fetch failed.", err);
-        setError(err);
-      } finally {
-        // 6. This always runs, ensuring the loading indicator is turned off.
-        setIsLoading(false);
-        console.log("HOOK: Data fetch cycle complete.");
-      }
+            // Get the current version from the server's cache/database (needed for cacheSet)
+            const finalEtag = status !== 304 ? data?.etag : cachedEntry.etag; 
+
+            if (status === 0) {
+                // Stale request was ignored. Do nothing.
+                return;
+            }
+
+            if (status === 304) {
+                // A. Handle 304 Not Modified
+                console.log("♻️ Hook Logic: 304 received. Refreshing cache metadata.");
+                
+                // Re-cache metadata to update fetchedAt time
+                cacheSet(TOUR_LANDING_CACHE_KEY, { 
+                    data: data, // data contains cachedEntry.data from the network service
+                    etag: finalEtag,
+                    fetchedAt: Date.now() 
+                });
+                // Ensure items are displayed if they weren't already (SWR)
+                setItems(parseAndNormalizeItems(data)); 
+
+            } else if (status >= 200 && status < 300) {
+                // B. Handle 200 OK (New Data)
+                console.log("✅ Hook Logic: 200 OK received. Updating data and cache.");
+
+                // Update cache with fresh data
+                cacheSet(TOUR_LANDING_CACHE_KEY, { 
+                    data: data, 
+                    etag: finalEtag, // Use the ETag received in the 200 response header
+                    fetchedAt: Date.now() 
+                });
+                setItems(parseAndNormalizeItems(data));
+
+            } else {
+                // C. Handle unexpected status code returned by the service (e.g., 500)
+                console.error(`Hook Logic: Unexpected status ${status}.`);
+                // Fallback: If error occurred and cache was present, do nothing (keep stale data).
+            }
+            
+        } catch (err) {
+            // D. Handle Network/Aborted Errors
+            if (err.message === 'Aborted') {
+                console.log('[useTourData] Fetch aborted by controller. (Ignored)'); 
+                return; 
+            }
+
+            console.error('[useTourData] Fetch failed:', err);
+            setError(err);
+            
+            // Only stop the loader if there was no existing cache data
+            if (!cachedEntry) {
+                setIsLoading(false);
+            }
+
+        } finally {
+            // Stop loading indicator only after the network call finishes
+            setIsLoading(false);
+        }
     };
 
-    fetchOnly(); // Execute the function.
+    useEffect(() => {
+        fetchTourData();
 
-  }, []); // The empty array ensures this effect runs only once.
+            if (!isMountedRef.current) {
+                isMountedRef.current = true;
+                // Skip the cleanup setup on the very first mount
+                return;
+            }
+            
+            // Cleanup function only runs if the component has fully mounted previously
+            return () => {
+                if (currentControllerRef.current) {
+                    try {
+                        console.log("[useTourData] Cleanup: Aborting in-flight request.");
+                        currentControllerRef.current.abort();
+                    } catch (_) {}
+                }
+            };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []); // Dependency array remains empty
 
-  return { items, isLoading, error };
-};
+    return { items, isLoading, error };
+}
