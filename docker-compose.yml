@@ -1,7 +1,6 @@
 version: '3.8'
 
 services:
-
   db:
     image: mysql:8.0
     container_name: mysql_db
@@ -19,6 +18,9 @@ services:
       retries: 10
       start_period: 10s
 
+   
+ 
+
   tour_api:
     build:
       context: ./backend/tour_api
@@ -33,22 +35,60 @@ services:
       - ./backend/tour_api/.env.tours
     environment:
       FLASK_APP: main.py
+      FLASK_ENV: development
       APP_ENV: development
       FLASK_RUN_EXTRA_FILES: /app
       # Optionally set REDIS_HOST in this env block or in .env.tours:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDPANDA_BROKERS: kafka:9092 # ADDED: Broker address for internal Docker network
+      # *** CRITICAL CHANGE ***: Use the new service name and internal port
     command: flask run --host=0.0.0.0 --port=3001 --reload
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka: # DEPENDENCY changed from redpanda to kafka
+        condition: service_started
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3001/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: "20s"
+      
+  # ------------------------------------------------------------------
+  # 8. ML_PROCESSOR (Python Consumer) - Cleans, Enriches, and Saves ML data
+  # This will run your Python consumer logic (which needs 'confluent-kafka')
+  # ------------------------------------------------------------------
+  ml_processor:
+    image: tourism-analytics-ml_processor
+    build:
+      context: ./ml_processor # Assuming you have a folder named 'processor'
+    container_name: ml_data_processor
+    # We will install confluent-kafka inside this container's build step
+    
+    # Environment variables for the processor to connect to its dependencies
+    environment:
+      KAFKA_BOOTSTRAP: kafka_broker:9092
+      MONGO_URI: mongodb://mongo:27017/
+      # - REDPANDA_BROKERS=kafka:29092 # Connect to the broker service name
+      # - DB_HOST=mongodb # Connect to your database service name
+      # ... (Other DB credentials needed for enrichment lookup) ...
+    
+    volumes:
+      - processor_output:/app/data
+
+    depends_on:
+      - kafka # Must wait for the broker
+      - mongo       # Must wait for the database (for enrichment)
+      
+    # Command to start the long-running consumer script
+    command: python3 -u ml_consumer.py
+
+    restart: always
 
   hotel_api:
     build:
@@ -119,7 +159,75 @@ services:
       retries: 3
     # networks: default (compose will attach to default network so services can reach 'redis')
   # ------------------------------------------
+ 
+# 3. MESSAGE BROKER (Bitnami Kafka - Reliable Local Alternative)
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka_broker
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
 
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka_broker:9092
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+    # environment:
+    #   # 1. Zookeeper Connection (Required for Confluent Kafka)
+    #   KAFKA_BROKER_ID: 1
+    #   KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+    #   KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+    #   KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka_broker:9092
+
+    #   KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    #   KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    #   KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      
+    #   # 2. Listener Configuration
+    #   # Internal Listener (for other containers): PLAINTEXT://kafka:29092
+    #   # External Listener (for host access): PLAINTEXT_HOST://localhost:9092
+    #   KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+    #   KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+    #   KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+    #   KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      
+    #   # 3. Topic Configuration
+    #   KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      zookeeper:
+        condition: service_started
+    restart: always
+
+  # Zookeeper (Required for Bitnami Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    restart: always
+
+  mongo:
+    image: mongo:6.0
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+
+    
+# --- Add New Volumes to the Bottom of your file ---
 volumes:
   db_data:
   redis-data:
+  redpanda_data:    # New volume for Redpanda's log data
+  processor_output: # New volume to store the output Parquet/CSV files
+  mongo_data:

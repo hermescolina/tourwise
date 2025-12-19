@@ -45,6 +45,16 @@ LANGUAGES = [
     {"code": "de", "name": "German", "flag": "🇩🇪"},
     {"code": "es", "name": "Spanish", "flag": "🇪🇸"},
     {"code": "fr", "name": "French", "flag": "🇫🇷"},
+    {"code": "it", "name": "Italian", "flag": "🇮🇹"},
+    {"code": "pt", "name": "Portuguese", "flag": "🇵🇹"},
+    {"code": "ru", "name": "Russian", "flag": "🇷🇺"},
+    {"code": "zh", "name": "Chinese (Simplified)", "flag": "🇨🇳"},
+    {"code": "ja", "name": "Japanese", "flag": "🇯🇵"},
+    {"code": "ko", "name": "Korean", "flag": "🇰🇷"},
+    {"code": "ar", "name": "Arabic", "flag": "🇦🇪"},
+    {"code": "hi", "name": "Hindi", "flag": "🇮🇳"},
+    {"code": "th", "name": "Thai", "flag": "🇹🇭"},
+    {"code": "id", "name": "Indonesian", "flag": "🇮🇩"},    
 ]
 
 @config_bp.route('/languages', methods=['GET'])

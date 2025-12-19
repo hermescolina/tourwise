@@ -22,7 +22,7 @@ export async function performNetworkFetch({
 
     try {
         const res = await fetch(`${apiBaseTour}${TOUR_ENDPOINT}`, { headers, signal });
-        
+        console.log("res status", res.status)
         // 1. Stale Response Guard (Prevents an old fetch from overwriting a new one)
         if (reqId !== currentReqIdRef.current) {
             console.warn('NetworkFetch: ignoring stale response (reqId)', { reqId, currentReqId: currentReqIdRef.current });

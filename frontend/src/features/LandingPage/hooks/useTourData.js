@@ -1,7 +1,7 @@
 // src/hooks/useTourData.js
 import { useState, useEffect, useRef } from 'react';
 import { apiBaseTour } from '@/config'; 
-import { parseAndNormalizeItems } from '@LandingPage/utilities/dataProcessor'; 
+import { parseAndNormalizeItems } from '@Common/utilities/dataProcessor'; 
 import { performNetworkFetch } from '@LandingPage/services/config/tourdataService'; 
 
 
@@ -79,7 +79,7 @@ export function useTourData() {
                     fetchedAt: Date.now() 
                 });
                 // Ensure items are displayed if they weren't already (SWR)
-                setItems(parseAndNormalizeItems(data)); 
+                setItems(parseAndNormalizeItems(data),"tour"); 
 
             } else if (status >= 200 && status < 300) {
                 // B. Handle 200 OK (New Data)
@@ -91,7 +91,7 @@ export function useTourData() {
                     etag: finalEtag, // Use the ETag received in the 200 response header
                     fetchedAt: Date.now() 
                 });
-                setItems(parseAndNormalizeItems(data));
+                setItems(parseAndNormalizeItems(data),"tour");
 
             } else {
                 // C. Handle unexpected status code returned by the service (e.g., 500)

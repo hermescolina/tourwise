@@ -50,15 +50,14 @@ from tour_routes import tours_bp
 from app_categories import bp_categories
 from bp_hotel_rooms import rooms_bp
 from bp_xendit_webhook import bp_xendit
-from cache_tourpage import bp_tourpages
-from cache_tour_landing import bp_tourlandingpages
-from cache_touradmin import bp_touradmin
-from cache_tourcards import bp_tourcards
-from cache_tourcardsadmin import bp_tourcardsadmin
-from cache_touritinerary import bp_touritinerary
-from cache_historyculture import bp_history_images
+from app.modules.tour.cache.cache_tourpage import bp_tourpages
+from app.modules.tour.cache.cache_tour_landing import bp_tourlandingpages
+from app.modules.tour.cache.cache_touradmin import bp_touradmin
+from app.modules.tour.cache.cache_tourcards import bp_tourcards
+from app.modules.tour.cache.cache_tourcardsadmin import bp_tourcardsadmin
+from app.modules.tour.cache.cache_touritinerary import bp_touritinerary
+from app.modules.tour.cache.cache_historyculture import bp_history_images
 from config import config_bp
-from test_routes import test_bp
 
 
 
@@ -1595,7 +1594,7 @@ app.register_blueprint(bp_tourcardsadmin, url_prefix="/api/tca")
 app.register_blueprint(bp_touritinerary, url_prefix="/api/ti")
 app.register_blueprint(bp_history_images, url_prefix="/api/th")
 app.register_blueprint(config_bp, url_prefix="/api/config")
-app.register_blueprint(test_bp, url_prefix="/api/tred")
+
 
 
 

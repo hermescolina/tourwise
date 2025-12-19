@@ -15,7 +15,7 @@ mkdir -p "$BACKUP_DIR"
 
 echo "🔄 Backing up MySQL databases from container: $CONTAINER_NAME"
 docker exec "$CONTAINER_NAME" \
-    mysqldump -u$MYSQL_USER -p$MYSQL_PASSWORD --all-databases > "$DUMP_FILE"
+    mysqldump -u$MYSQL_USER -p$MYSQL_PASSWORD --all-databases --routines --triggers > "$DUMP_FILE"
 
 if [ $? -eq 0 ]; then
     echo "✅ SQL dump saved to $DUMP_FILE"
