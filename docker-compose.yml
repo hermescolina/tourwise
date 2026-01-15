@@ -18,23 +18,20 @@ services:
       retries: 10
       start_period: 10s
 
-   
- 
-
   tour_api:
     build:
-      context: ./backend/tour_api
+      context: ./backend/tour_api/app
     container_name: flask_tour_api
     ports:
       - "3001:3001"
     volumes:
-      - ./backend/tour_api:/app
+      - ./backend/tour_api/app:/app
       - ./backend/uploads:/app/uploads
     working_dir: /app
     env_file:
       - ./backend/tour_api/.env.tours
     environment:
-      FLASK_APP: main.py
+      FLASK_APP: tour_main.py
       FLASK_ENV: development
       APP_ENV: development
       FLASK_RUN_EXTRA_FILES: /app

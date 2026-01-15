@@ -3,13 +3,22 @@ import os, json, hashlib
 from flask import Blueprint, jsonify, request, send_file, abort, current_app
 import mysql.connector
 from dotenv import load_dotenv
+from pathlib import Path
 
 bp_tourcards = Blueprint("tourcards", __name__)
 
 # ---- Config ---------------------------------------------------------------
-env_file = ".env.development" if os.getenv("bp_tourcards_ENV") == "development" else ".env.tours"
-load_dotenv(dotenv_path=env_file)
+# 1. Define the Project Root (4 levels up from app/modules/tour/cache/)
+# cache -> tour -> modules -> app -> [ROOT]
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
+# 2. Determine which filename to use
+env_name = ".env.development" if os.getenv("bp_tourpages_ENV") == "development" else ".env.tours"
+
+# 3. Create the absolute path (Using the SAME variable 'env_name')
+env_path = BASE_DIR / env_name
+
+load_dotenv(dotenv_path=env_path)
 tours_db_config = {
     "host": os.getenv("TOUR_DB_HOST"),
     "user": os.getenv("TOUR_DB_USER"),
@@ -22,7 +31,7 @@ CACHE_FILE = os.getenv("tourcards_CACHE", "/var/lib/tourwise/tourcards.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
 
 # 🔎 boot diagnostics (prints once at import)
-print(f"[tourcards] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
+print(f"[tourcards] env_file={env_name}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
 print(f"[tourcards] tourcards_CACHE={CACHE_FILE}", flush=True)
 
 # ---- File helpers ---------------------------------------------------------

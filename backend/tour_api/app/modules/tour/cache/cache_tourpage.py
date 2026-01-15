@@ -8,16 +8,25 @@ from flask import (
     )
 import mysql.connector
 from dotenv import load_dotenv
-from redis_client import redis_client
-from memory_cache import memoryCache
+from app.modules.tour.cache.redis_client import redis_client
+from app.modules.tour.cache.memory_cache import memoryCache
 from typing import Any, Optional
-
+from pathlib import Path
 
 bp_tourpages = Blueprint("tourpages", __name__)
 
 # ---- Config ---------------------------------------------------------------
-env_file = ".env.development" if os.getenv("bp_tourpages_ENV") == "development" else ".env.tours"
-load_dotenv(dotenv_path=env_file)
+# 1. Define the Project Root (4 levels up from app/modules/tour/cache/)
+# cache -> tour -> modules -> app -> [ROOT]
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
+# 2. Determine which filename to use
+env_name = ".env.development" if os.getenv("bp_tourpages_ENV") == "development" else ".env.tours"
+
+# 3. Create the absolute path (Using the SAME variable 'env_name')
+env_path = BASE_DIR / env_name
+
+load_dotenv(dotenv_path=env_path)
 
 tours_db_config = {
     "host": os.getenv("TOUR_DB_HOST"),
@@ -26,7 +35,6 @@ tours_db_config = {
     "database": os.getenv("TOUR_DB_NAME"),
     "port": int(os.getenv("TOUR_DB_PORT", "3306")),
 }
-
 
 CACHE_FILE = os.getenv("tourpages_CACHE", "/var/lib/tourwise/tourpages.json")
 GROUP_CONCAT_MAX_LEN = int(os.getenv("GROUP_CONCAT_MAX_LEN", "10000000"))
@@ -52,7 +60,7 @@ memory_cache = memoryCache(default_ttl=MEMORY_CACHE_TTL)
 VER_CACHE_TTL_MS = 500  # tweakable: 0.5 sec
 
 # 🔎 boot diagnostics (prints once at import)
-print(f"[tourpages] env_file={env_file}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
+print(f"[tourpages] env_file={env_path}, APP_ENV={os.getenv('APP_ENV')}", flush=True)
 print(f"[tourpages] tourpage_CACHE={CACHE_FILE}", flush=True)
 print(f"[tourpages] redis_keys={REDIS_KEY_JSON},{REDIS_KEY_VER} ttl={REDIS_TTL}", flush=True)
 print(f"[tourpages] memory_keys={MEM_KEY_JSON},{MEM_KEY_VER} ttl={MEMORY_CACHE_TTL}", flush=True)
@@ -95,7 +103,6 @@ def write_both(redis_client, redis_key: str, data: Any, ver: str):
     redis_client.setex(REDIS_KEY_VER, REDIS_TTL, ver)
     # Write to memory cache (as Python object)
     _memory_set(MEM_KEY_JSON, payload, ttl=VER_CACHE_TTL_MS / 1000)
-
 
 
 # ---- File helpers ---------------------------------------------------------
@@ -172,33 +179,29 @@ def _fetch_tourpages_json(slug):
     finally:
         cur.close()
         conn.close()
-        
+
 def get_tourpages_token():
     conn = mysql.connector.connect(**tours_db_config)
-    """
-    Generate a lightweight tourpage token for caching purposes.
-    Format: <total_count>-<latest_unix_timestamp>
-    """
-    tables = ["items", "tours", "tour_history_images", "tour_videos", "vendors", "tour_guides"]
     cur = conn.cursor()
     try:
-        total_count = 0
-        latest_ts = 0
-
-        for table in tables:
-            cur.execute(f"""
-                SELECT COUNT(*), UNIX_TIMESTAMP(COALESCE(MAX(updated_at), '1970-01-01'))
-                FROM tourism_app.{table}
-            """)
-            count, ts = cur.fetchone()
-            total_count += int(count or 0)
-            if ts:
-                latest_ts = max(latest_ts, int(ts))
-
-        return f"{total_count}-{latest_ts}"
+        # One query to rule them all
+        query = """
+            SELECT SUM(cnt), MAX(ts) FROM (
+                SELECT COUNT(*) as cnt, UNIX_TIMESTAMP(MAX(updated_at)) as ts FROM items
+                UNION ALL SELECT COUNT(*), UNIX_TIMESTAMP(MAX(updated_at)) FROM tours
+                UNION ALL SELECT COUNT(*), UNIX_TIMESTAMP(MAX(updated_at)) FROM tour_history_images
+                UNION ALL SELECT COUNT(*), UNIX_TIMESTAMP(MAX(updated_at)) FROM tour_videos
+                UNION ALL SELECT COUNT(*), UNIX_TIMESTAMP(MAX(updated_at)) FROM vendors
+                UNION ALL SELECT COUNT(*), UNIX_TIMESTAMP(MAX(updated_at)) FROM tour_guides
+            ) as totals
+        """
+        cur.execute(query)
+        total_count, latest_ts = cur.fetchone()
+        
+        return f"{total_count or 0}-{int(latest_ts or 0)}"
     finally:
         cur.close()
-
+        conn.close()
 
 def get_tourpages_version():
     conn = mysql.connector.connect(**tours_db_config)
@@ -297,7 +300,6 @@ def _get_memory_ver_cached(redis_json, redis_ver):
     cached = _memory_get(MEM_KEY_JSON)
     now = time.time()
     # Proper logging — show actual cached value even if None
-    current_app.logger.info(f"check 3333 cached={cached!r}")
 
     # Use the same timestamp key we write below: "cached_at"
     current_app.logger.info(f"check 3 in cached {isinstance(cached, dict)}")

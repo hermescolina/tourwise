@@ -25,6 +25,14 @@ export default defineConfig({
       { 
         find: '@TourCardsPage', 
         replacement: fileURLToPath(new URL('./src/features/TourCardsPage', import.meta.url)) 
+      },
+      { 
+        find: '@TourPage', 
+        replacement: fileURLToPath(new URL('./src/features/TourPage', import.meta.url)) 
+      },
+      { 
+        find: '@LoginPage', 
+        replacement: fileURLToPath(new URL('./src/features/LoginPage', import.meta.url)) 
       }
     ]
   },

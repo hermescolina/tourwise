@@ -5,17 +5,27 @@ import mysql.connector
 from mysql.connector import pooling
 from mysql.connector import Error as MySQLError
 from dotenv import load_dotenv
-from redis_client import redis_client
-from memory_cache import memoryCache
+from app.modules.tour.cache.redis_client import redis_client
+from app.modules.tour.cache.memory_cache import memoryCache
 from typing import Any, Optional
 from werkzeug.utils import secure_filename
 from db_pool import connection_pool
+from pathlib import Path
 
 bp_tourlandingpages = Blueprint("tourlandingpages", __name__)
 
 # ---- Config ---------------------------------------------------------------
-env_file = ".env.development" if os.getenv("bp_tourlandingpages_ENV") == "development" else ".env.tours"
-load_dotenv(dotenv_path=env_file)
+# 1. Define the Project Root (4 levels up from app/modules/tour/cache/)
+# cache -> tour -> modules -> app -> [ROOT]
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+
+# 2. Determine which filename to use
+env_name = ".env.development" if os.getenv("bp_tourpages_ENV") == "development" else ".env.tours"
+
+# 3. Create the absolute path (Using the SAME variable 'env_name')
+env_path = BASE_DIR / env_name
+
+load_dotenv(dotenv_path=env_path)
 
 tours_db_config = {
     "host": os.getenv("TOUR_DB_HOST"),

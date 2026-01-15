@@ -1,6 +1,6 @@
 // src/components/TourDisplay.jsx
 import React from 'react';
-import { useTourData } from '@LandingPage/hooks/useTourData'; // Import your hook
+import { useTourData } from '@LandingPage/hooks/useTourLandingData'; // Import your hook
 import { apiBaseTour, frontendBase } from '@/config';
 
 import { useNavigate, useLocation, useParams,  useSearchParams} from 'react-router-dom';
@@ -41,42 +41,42 @@ function TourDisplay({ styles }) {
         <div className={styles.tourCards}>
             
             {items && items.map((it, idx) => {
-                            const tour = it.tour || {};
-                            const key = tour.item_id ?? tour.id ?? tour.slug ?? idx;
-                            // safe price formatting
-                            let price = '';
-                            try {
-                            const raw = (tour.price ?? '').toString().replace(/,/g, '').trim();
-                            price = raw ? Number(raw).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '';
-                            } catch (e) {
-                            price = tour.price ?? '';
-                            }
+                const tour = it.tour || {};
+                const key = tour.item_id ?? tour.id ?? tour.slug ?? idx;
+                // safe price formatting
+                let price = '';
+                try {
+                const raw = (tour.price ?? '').toString().replace(/,/g, '').trim();
+                price = raw ? Number(raw).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '';
+                } catch (e) {
+                price = tour.price ?? '';
+                }
 
-                            return (
-                            <div
-                                className={styles.tourCard}
-                                key={key}
-                                onClick={() => navigate(`/tour/${tour.slug}`)}
-                            >
-                                {tour.image && (
-                                <img
-                                    src={getStaticImageUrl(tour.image)}
-                                    alt={tour.title ?? 'No title'}
-                                    className={styles.tourImage}
-                                />
-                                )}
+                return (
+                <div
+                    className={styles.tourCard}
+                    key={key}
+                    onClick={() => navigate(`/tour/${tour.slug}`)}
+                >
+                    {tour.image && (
+                    <img
+                        src={getStaticImageUrl(tour.image)}
+                        alt={tour.title ?? 'No title'}
+                        className={styles.tourImage}
+                    />
+                    )}
 
-                                <div className={styles.tourInfo}>
-                                <h3>{tour.title}</h3>
-                                <p className={styles.description}>
-                                    {tour.description ?? 'No description available.'}
-                                </p>
-                                {tour.location && <p className={styles.location}>{tour.location}</p>}
-                                {price !== '' && <p className={styles.price}>{price}</p>}
-                                </div>
-                            </div>
-                            );
-                        })}
+                    <div className={styles.tourInfo}>
+                    <h3>{tour.title}</h3>
+                    <p className={styles.description}>
+                        {tour.description ?? 'No description available.'}
+                    </p>
+                    {tour.location && <p className={styles.location}>{tour.location}</p>}
+                    {price !== '' && <p className={styles.price}>{price}</p>}
+                    </div>
+                </div>
+                );
+            })}
         </div>
         </>
     );

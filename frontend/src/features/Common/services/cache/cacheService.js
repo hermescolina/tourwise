@@ -10,14 +10,13 @@ const nowMs = () => Date.now();
 /**
  * Reads data from localStorage. No expiration check is performed here; 
  * freshness is dictated by the ETag/304 response in the main fetch.
- * * @param {string} key 
+ * @param {string} key 
  * @returns {{ data: any, etag: string, fetchedAt: number } | null}
  */
 export function cacheGet(key) {
     try {
         const raw = localStorage.getItem(key);
         if (!raw) return null;
-
         const obj = JSON.parse(raw);
         if (!obj || typeof obj !== 'object') return null;
 
@@ -35,7 +34,7 @@ export function cacheGet(key) {
 /**
  * Writes data to localStorage. Stores data, ETag, and fetchedAt timestamp.
  * Uses a basic stale-write guard.
- * * @param {string} key 
+ * @param {string} key 
  * @param {{ data: any, etag?: string, fetchedAt?: number }} payload
  * @returns {boolean} success
  */
@@ -77,10 +76,11 @@ export function cacheSet(key, { data, etag = null, fetchedAt = null }) {
 
 /**
  * Convenience to show cached data immediately if present (SWR Phase 1: Render Stale).
- * * @param {string} cacheKey 
+ * @param {string} cacheKey 
  * @param {function} setter State setter function (e.g., setItems)
  * @returns {object | null} cached entry
  */
+
 export function primeStateFromCache(cacheKey, setter) {
     const cached = cacheGet(cacheKey);
     if (cached?.data) {
@@ -97,6 +97,7 @@ export function primeStateFromCache(cacheKey, setter) {
  * @param {*} value 
  * @returns {object | null}
  */
+
 export function tryParse(value) {
     if (value === null || value === undefined) return null;
     if (typeof value === "object") return value;
