@@ -1,6 +1,7 @@
+//services/tourcardsdataService.js
 /**
  * Executes the network fetch for tour landing data, handling immediate response checks (304, etc.).
- * * @param {string} apiBaseTour - The base API URL.
+ * @param {string} apiBaseTour - The base API URL.
  * @param {object} headers - Headers object containing ETag, etc.
  * @param {AbortSignal} signal - Signal used to abort the request.
  * @param {number} reqId - The ID of the current request (for stale-response guard).

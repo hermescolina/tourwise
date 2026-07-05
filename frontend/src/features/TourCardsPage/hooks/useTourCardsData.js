@@ -62,11 +62,13 @@ const fetchTourCardsData = async () => {
             // Get the current version from the server's cache/database (needed for cacheSet)
             const finalEtag = status !== 304 ? data?.etag : cachedEntry.etag; 
 
+            console.log("TourCardsPage.rs 1 res status:",status);
+
             if (status === 0) {
                 // Stale request was ignored. Do nothing.
                 return;
             }
-
+            
             if (status === 304) {
                 // A. Handle 304 Not Modified
                 console.log("♻️ Hook Logic: 304 received. Refreshing cache metadata.");

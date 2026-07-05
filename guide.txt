@@ -1,0 +1,717 @@
+ docker exec -it mysql_db mysql -uroot -pAsdf1234!
+
+
+docker-compose down -v
+docker-compose up --build -d
+
+docker-compose up
+docker-compose down
+
+docker-compose up -d 
+
+
+docker exec -it mysql_db bash
+
+docker exec -it mysql_db2 bash
+
+curl http://localhost:3001/api/landing-data
+
+docker logs flask_tour_api
+
+
+mysql -u root -p < /all_databases_backup.sql
+
+docker exec -it mysql_db mysql -u root -p
+
+
+docker cp all_databases_backup.sql mysql_db:/all_databases_backup.sql
+
+docker exec -it mysql_db bash
+
+mysql -u root -p < /all_databases_backup.sql
+
+docker logs flask_tour_api
+
+
+docker rm -f flask_car_api flask_hotel_api flask_tour_api mysql_db vite_frontend
+
+docker volume rm tourism-analytics_db_data
+
+docker system prune -af --volumes
+
+docker rm -f $(docker ps -aq)
+
+docker rmi -f $(docker images "tourism-analytics_*" -q)
+
+
+docker volume prune -f
+
+docker system prune -af --volumes
+
+docker-compose build --no-cache
+docker-compose up -d
+
+
+docker exec -it mysql_db mysql -u root -pAsdf1234!
+
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+curl http://localhost:3001/api/landing-data
+
+docker logs flask_tour_api
+
+
+docker exec -it mysql_db mysql -u root -pAsdf1234!
+
+CREATE USER 'root'@'%' IDENTIFIED BY 'Asdf1234!';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+docker logs flask_tour_api
+
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' IDENTIFIED BY 'Asdf1234!' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+
+curl http://localhost:3001/api/landing-data
+
+docker cp all_databases_backup.sql mysql_db:/all_databases_backup.sql
+
+docker exec -it mysql_db bash
+
+mysql -u root -p < /all_databases_backup.sql
+
+
+docker run -it --network=tourism-analytics_default mysql:8.0 mysql -u root -pAsdf1234! -h mysql_db
+
+
+#!/bin/bash
+
+# Run cloudflared tunnel in the background
+./cloudflared/cloudflared tunnel run tourwise &
+
+# Then run Docker Compose in the foreground
+docker-compose up --build
+
+
+CREATE USER 'root'@'%' IDENTIFIED BY 'touradmin';
+GRANT ALL PRIVILEGES ON *.* TO 'touradmin'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+
+docker-compose down
+docker-compose up --build -d
+
+
+
+mysqldump -u root -pAsdf1234! tourism_app > tourism_app_backup.sql 
+mysqldump -u root -pAsdf1234! car_directory > car_directory_backup.sql
+mysqldump -u root -pAsdf1234! hotel_directory > hotel_directory_backup.sql
+
+
+docker cp tourism_app_backup.sql mysql_db:/tourism_app_backup.sql
+docker cp car_directory_backup.sql mysql_db:/car_directory_backup.sql
+docker cp hotel_directory_backup.sql mysql_db:/hotel_directory_backup.sql
+
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! tourism_app < /tourism_app_backup.sql
+mysql -u root -pAsdf1234! car_directory < /car_directory_backup.sql
+mysql -u root -pAsdf1234! hotel_directory < /hotel_directory_backup.sql
+mysql -uroot -pAsdf1234!
+
+docker-compose restart tour_api
+
+
+docker exec -it mysql_db mysql -u root -pAsdf1234!
+
+FB_APP_ID=3548071778817355
+FB_APP_SECRET=d912d946acfffa75efbe002b4dfa8dcd
+
+
+# In tour_api/.env only 👇
+
+FB_APP_ID=3548071778817355
+FB_APP_SECRET=d912d946acfffa75efbe002b4dfa8dcd
+FB_PAGE_ID=515888155117986
+FB_PAGE_ACCESS_TOKEN=EAAya89YDlUsBO6MPfsYQkJkxK8ccw09u9hWIcNzpZB2CeXW20qRtjaXN92ZAZAcIrkiWQo3eigM1ZC9FYUsPyG1kbZCw133yBuLpr9h53HW8AeVi4sLeWhG5i0qGulsRaMRPT4BtlHgBIYOmiKpiwPiFrz9L7lea9sc0PFlShz8Co88YZADesbYWemcCjrpig1nViIyIEn4waT9HcBEGPOxcXGo1QavoFUreZCo
+
+
+docker-compose build tour_api
+docker-compose up -d tour_api
+
+
+docker-compose build db
+docker-compose up -d db
+
+docker-compose down --volumes --remove-orphans
+docker system prune -af
+
+
+docker-compose build --no-cache tour_api
+docker-compose up -d
+docker logs -f flask_tour_api
+
+docker cp tourism_app_backup.sql mysql_db:/tourism_app_backup.sql
+docker cp car_directory_backup.sql mysql_db:/car_directory_backup.sql
+docker cp hotel_directory_backup.sql mysql_db:/hotel_directory_backup.sql
+
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! tourism_app < /tourism_app_backup.sql
+mysql -u root -pAsdf1234! car_directory < /car_directory_backup.sql
+mysql -u root -pAsdf1234! hotel_directory < /hotel_directory_backup.sql
+mysql -uroot -pAsdf1234!
+
+docker cp hotel_directory_backup.sql mysql_db:/hotel_directory_backup.sql
+
+docker exec -it flask_tour_api bash
+ping host.docker.internal
+
+
+docker-compose build tour_api
+docker-compose restart tour_api
+
+
+
+# 1. Stop and remove the running container (if exists)
+docker stop flask_tour_api && docker rm flask_tour_api
+
+# 2. Remove the Docker image
+docker rmi tourism-analytics_tour_api
+
+# 3. (Optional) Verify it's removed
+docker ps -a | grep tour_api        # Should return nothing
+docker images | grep tour_api       # Should return nothing
+
+
+docker stop flask_tour_api
+docker rm flask_tour_api
+
+docker-compose build tour_api
+
+docker-compose up -d tour_api
+
+docker logs -f flask_tour_api
+
+docker stop vite_frontend
+docker rm vite_frontend
+
+docker-compose build frontend
+
+docker-compose up -d frontend
+
+docker logs -f vite_frontend
+
+
+
+docker stop flask_tour_api
+docker rm flask_tour_api
+
+docker-compose build tour_api
+
+docker-compose up -d tour_api
+
+docker-compose up -d --build
+
+docker stop vite_frontend
+docker rm vite_frontend
+
+docker-compose build frontend
+
+docker-compose up -d frontend
+
+docker logs -f vite_frontend
+
+snap run ngrok http 5173
+snap run ngrok http 3001
+
+snap run ngrok start --all
+
+git rm --cached .env
+git rm --cached .env.cars
+git rm --cached .env.online
+git rm --cached .env\ copy.cars
+
+a
+
+sudo chown -R $USER:$USER /home/hermes/tourism-analytics
+sudo chown -R $USER:$USER /home/hermes/tourism-analytics/backend/api
+
+
+docker-compose down --volumes --remove-orphans
+docker system prune -af
+
+
+docker-compose build --no-cache tour_api
+docker-compose up -d
+
+docker cp tourism_app_backup.sql mysql_db:/tourism_app_backup.sql
+docker cp car_directory_backup.sql mysql_db:/car_directory_backup.sql
+docker cp hotel_directory_backup.sql mysql_db:/hotel_directory_backup.sql
+
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! tourism_app < /tourism_app_backup.sql
+mysql -u root -pAsdf1234! car_directory < /car_directory_backup.sql
+mysql -u root -pAsdf1234! hotel_directory < /hotel_directory_backup.sql
+mysql -uroot -pAsdf1234!
+
+
+docker-compose down --volumes --remove-orphans
+docker system prune -af
+
+
+docker-compose build --no-cache tour_api
+docker-compose up -d
+
+docker-compose down --volumes --remove-orphans
+docker system prune -af
+docker-compose build --no-cache
+docker-compose up -d
+
+docker cp alldb.sql mysql_db:/alldb.sql
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! < /alldb.sql
+mysql -u root -pAsdf1234!
+use tourism_app;
+INSERT INTO vendors VALUE(1,'Hermes Colina','itloboc@gmail.com','09229800995','Asdf1234',now(),'09229800995');
+
+
+
+use tourism_app;
+ALTER TABLE bookings ADD COLUMN token VARCHAR(255);
+ALTER TABLE users MODIFY password_hash VARCHAR(255) NULL;
+ALTER TABLE users ADD COLUMN whatsapp VARCHAR(20);
+ALTER TABLE bookings
+  ADD COLUMN confirmation_token VARCHAR(255),
+  ADD COLUMN status VARCHAR(50) DEFAULT 'pending',
+  ADD COLUMN confirmed_at DATETIME DEFAULT NULL,
+  ADD COLUMN vendor_id INT;
+
+update tour_videos set category='Tour Videos';
+
+
+rwwf mpwg cqwj wrox
+
+smtp.login('aws.alcians@gmail.com', 'rwwf mpwg cqwj wrox')
+
+SELECT id, name FROM categories ORDER BY name ASC;
+
+
+docker cp alldb.sql mysql_db:/alldb.sql
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! < /alldb.sql
+mysql -u root -pAsdf1234!
+use tourism_app;
+INSERT INTO vendors VALUE(1,'Hermes Colina','itloboc@gmail.com','09229800995','Asdf1234',now(),'09229800995');
+
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234!
+use tourism_app;
+
+SELECT v.id, v.email FROM vendors v JOIN tours t ON v.id = t.vendor_id WHERE t.id = %s;
+
+
+ docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' mysql_db
+
+
+docker exec -it mysql_db mysqldump -uroot -pAsdf1234!-h172.18.0.3 > alldb.sql
+
+
+
+https://graph.facebook.com/v18.0/oauth/access_token?
+  grant_type=fb_exchange_token&
+  client_id=123456789012345&                    ← your real App ID
+  client_secret=abc1234567890abcdefg1234567890& ← your real App Secret
+  fb_exchange_token=EAAa89YDlUsBO4c...          ← your current short-lived user token
+
+https://graph.facebook.com/v18.0/oauth/access_token?grant_type=fb_exchange_token&client_id=3548071778817355&client_secret=d912d946acfffa75efbe002b4dfa8dcd&fb_exchange_token=EAAya89YDlUsBO7CN4iJwmPoiFajSwFckZBECcivl54ZA3JuIEEdwUZBgzdSXqUMlGRIsbmob8DOMwlg4cp030Cie2IUnGkScr1zJIvaY7IetDpKZA7XXTsh2wlQcHaY02hCzm1bxqfc7GZBjQLgHgxg1dDeDlbEddxYINV7oCLJ7gOog5cSx1TM6DYbMTxMacQ7ZCg2E41hWWadjpfv47h3chTX6fJqN9CsZANT
+
+
+
+https://graph.facebook.com/3548071778817355/accounts?access_token=EAAya89YDlUsBO90wZAlmP9bK5gJrIBudDZCOxmg2PIZAmRZAMibT3vZBLuZCeo534CEcZA3dj3xK03CnAEO6ltlecR5TxZCnjFuycGjNFUfTdrAtmHjaBXKnagsj2lmi1VjDcyF1tBU7wCgQjDRdO3WS2q9a0w4lEeA7w68lYud3x180rZCS502audoN5Mi27BW9quM4ruLRd
+
+
+
+https://graph.facebook.com/v18.0/oauth/access_token?
+  grant_type=fb_exchange_token&
+  client_id=123456789012345&                    ← your real App ID
+  client_secret=abc1234567890abcdefg1234567890& ← your real App Secret
+  fb_exchange_token=EAAa89YDlUsBO4c...          ← your current short-lived user token
+
+
+
+
+docker stop flask_tour_api
+docker rm flask_tour_api
+docker build -t flask_tour_api .
+docker run -d --env-file .env.tours -p 3001:3001 --name flask_tour_api flask_tour_api
+
+
+
+1627478284588731 meta id
+
+
+
+<script>
+  window.fbAsyncInit = function() {
+    FB.init({
+      appId      : '{your-app-id}',
+      cookie     : true,
+      xfbml      : true,
+      version    : '{api-version}'
+    });
+      
+    FB.AppEvents.logPageView();   
+      
+  };
+
+  (function(d, s, id){
+     var js, fjs = d.getElementsByTagName(s)[0];
+     if (d.getElementById(id)) {return;}
+     js = d.createElement(s); js.id = id;
+     js.src = "https://connect.facebook.net/en_US/sdk.js";
+     fjs.parentNode.insertBefore(js, fjs);
+   }(document, 'script', 'facebook-jssdk'));
+</script>
+
+
+
+FB.getLoginStatus(function(response) {
+    statusChangeCallback(response);
+});
+
+
+
+{
+    status: 'connected',
+    authResponse: {
+        accessToken: '...',
+        expiresIn:'...',
+        signedRequest:'...',
+        userID:'...'
+    }
+}
+
+
+
+<fb:login-button 
+  config_id="{config_id}"
+  onlogin="checkLoginState();">
+</fb:login-button>
+
+
+
+
+function checkLoginState() {
+  FB.getLoginStatus(function(response) {
+    statusChangeCallback(response);
+  });
+}
+
+https://developers.facebook.com/docs/plugins/
+
+sdofTYes#$@234%#$
+
+pENtmhPPEX(OU%)M  
+
+https://account.protonvpn.com/signup?plan=free&ref=noupsell
+
+
+L5DMJP4N9bJL2yD* manager@tourwise.shop
+
+uNjyHYU8TG&Y3yA> booking@tourwise.shop
+sdofTYes#$@234%#$
+
+pENtmhPPEX(OU%)M
+
+qtli kowp kwlz lvco TourWise Vourcher info@tourwise.shop
+
+
+EAAOYqD5TvbgBO8cl3ZBZCvhUiheByzsvsEaO39pTePSyjqNQZAkz37s2l303yFOiHKi9dBokrSLmUIn3r2KPTTnTEonVl15GjMpFhsFZBHIuo28bGdKnJ0Osx6ZABlx9gWpiZBe6jxgoJXvcRQSZCYi0db3E16Lbh7ZBmZCPd9UufGS7JoT5A7Yud1dc2XChzUITPYkZCuiCFViblcMidY7K3BNZBcyfi65icXpX5lJMj9upgZBw9VwZD
+
+
+PN-id 779158345275413
+ACC-id 1432191094598576
+
+https://graph.facebook.com/v18.0/779158345275413/messages
+
+
+
+✅ What You Need: Mental Offloading
+Let’s fix this with a simple brain dump + focus filter:
+
+📝 Step 1: Dump all the ideas
+Don't sort. Just write them. Like:
+
+Save voucher data to DB
+
+View past bookings
+
+Auto-confirmation email
+
+Vendor panel
+
+WhatsApp notification
+
+PDF export
+
+Admin dashboard
+
+You’re literally just clearing RAM.
+
+
+Let’s start simple. Just list everything that’s:
+
+In progress
+
+Built but not cleaned
+
+Working but not saved, tested, or pushed
+
+Examples based on our convo:
+
+ Booking voucher displays
+
+ Voucher saves to database
+
+ API to get voucher by reference ID
+
+ View voucher in frontend by ref
+
+ Confirmation email/WhatsApp
+
+ PDF export or print button
+
+ Admin/vendor view of bookings
+
+
+https://graph.facebook.com/v19.0/oauth/access_token?
+  grant_type=fb_exchange_token
+  &client_id=YOUR_APP_ID
+  &client_secret=YOUR_APP_SECRET
+  &fb_exchange_token=SHORT_LIVED_USER_TOKEN
+
+
+
+
+EAAya89YDlUsBO7CN4iJwmPoiFajSwFckZBECcivl54ZA3JuIEEdwUZBgzdSXqUMlGRIsbmob8DOMwlg4cp030Cie2IUnGkScr1zJIvaY7IetDpKZA7XXTsh2wlQcHaY02hCzm1bxqfc7GZBjQLgHgxg1dDeDlbEddxYINV7oCLJ7gOog5cSx1TM6DYbMTxMacQ7ZCg2E41hWWadjpfv47h3chTX6fJqN9CsZANT
+
+
+
+EAAya89YDlUsBO7CN4iJwmPoiFajSwFckZBECcivl54ZA3JuIEEdwUZBgzdSXqUMlGRIsbmob8DOMwlg4cp030Cie2IUnGkScr1zJIvaY7IetDpKZA7XXTsh2wlQcHaY02hCzm1bxqfc7GZBjQLgHgxg1dDeDlbEddxYINV7oCLJ7gOog5cSx1TM6DYbMTxMacQ7ZCg2E41hWWadjpfv47h3chTX6fJqN9CsZANT
+EAAya89YDlUsBO22SddZAhR8dyPxuJ9r7LWNfLhwZBvzN01YQF78ZAZCklZBGG8vsqzyumADu9LYI4axG5TgyGmu0gBY4ZCoKV41I7UZAc8T94cgt1JkDZCvUFoUIQOZAB0z4ZBW7ZCuZAEQOBnQE9yDiK2ZBXNphrTIABQkjVb6fVZB5BVNiBaJxvVpRlnhuam78aRMnbNZCg5WLhK2SlZBy6dEn5aThNkD7oQD5SWpSjzpvdOMZD
+
+
+https://graph.facebook.com/v19.0/me/accounts?access_token=EAAya89YDlUsBOZCZCRjbdQYR6jHZAKJfkEweKKLQd6FvL6HVqqpy3pR83VPj6mXs1cgfz6pJeY4K7jAME081fpQ2loCriw3HXoCFK7QJ2J7rQ4McTOOoSLnZCA3LWx0NbX7oXu6Nvq9xX32ZBbU4V2eRz47KQ2jsWAWh0HCZA5TvAbwTEZBCoxEMSESYoYZBs1eF
+
+
+
+
+@app.route('/api/book-cart', methods=['POST'])
+def book_cart():
+    data = request.get_json()
+    reference_id = data.get('reference_id')
+    user_id = data.get('user_id')
+    email = data.get('email')
+    bookings = data.get('bookings', [])
+
+    try:
+        conn = mysql.connector.connect(**tours_db_config)
+        cursor = conn.cursor()
+
+        for item in bookings:
+            cursor.execute("""
+                INSERT INTO cart_bookings (reference_id, user_id, email, title, price, quantity)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                reference_id,
+                user_id,
+                email,
+                item['title'],
+                item['price'],
+                item['quantity']
+            ))
+
+        conn.commit()
+        return jsonify({"message": "Cart booking saved successfully."}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+from cart_routes import cr_bp
+app.register_blueprint(cr_bp, url_prefix='/api/cr') 
+
+
+docker stop flask_tour_api
+docker rm flask_tour_api
+
+docker-compose build tour_api
+
+docker-compose up -d tour_api
+
+docker logs -f flask_tour_api
+
+docker stop vite_frontend
+docker rm vite_frontend
+
+docker-compose build frontend
+
+docker-compose up -d frontend
+
+docker logs -f vite_frontend
+
+
+sruh desm jxfh qwrk
+
+
+drop table if exists `vendor_payments`;
+CREATE TABLE vendor_payments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  vendor_id INT NOT NULL,
+  gcash_name VARCHAR(100),
+  gcash_number VARCHAR(20),
+  bank_name VARCHAR(100),
+  bank_account_name VARCHAR(100),
+  bank_account_number VARCHAR(50),
+  paypal_email VARCHAR(100),
+  stripe_link VARCHAR(255),
+  custom_message TEXT,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+
+
+New-NetFirewallRule -DisplayName "Allow MySQL Custom 3307" -Direction Inbound -Protocol TCP -LocalPort 3307 -Action Allow
+
+
+
+Test-NetConnection -ComputerName 192.168.254.136 -Port 3309
+
+Test-NetConnection -ComputerName 192.168.254.136 -Port 2224
+Test-NetConnection -ComputerName 192.168.254.136 -Port 3307
+
+Get-NetFirewallRule -DisplayName "Allow MySQL TCP Port 3309"    
+Get-NetFirewallRule -DisplayName "Allow MySQL TCP Port 2222"
+
+netstat -ano | findstr :2224
+
+netstat -ano | findstr :3307
+
+
+
+netsh interface portproxy add v4tov4 listenport=3307 listenaddress=0.0.0.0 connectport=3307 connectaddress=127.0.0.1
+netsh interface portproxy add v4tov4 listenport=2222 listenaddress=0.0.0.0 connectport=2222 connectaddress=127.0.0.1
+netsh interface portproxy add v4tov4 listenport=2224 listenaddress=0.0.0.0 connectport=2224 connectaddress=127.0.0.1
+
+
+
+docker exec -it php_frontend sh
+
+
+apt update && apt install nano
+
+
+apt update
+apt install -y openssh-server
+service ssh start
+
+
+ssh-keygen -R [localhost]:2222
+ssh hermes@localhost -p 2222
+
+apt update
+apt install cockpit -y
+systemctl start cockpit
+
+
+cloudflared tunnel route dns tourwise ssh.tourwise.shop
+
+
+tourwisehermes.cloudflareaccess.com
+
+
+docker-compose build php_frontend
+docker-compose up -d
+
+
+ssh -vvv root@192.168.254.136 -p 2224
+
+
+UsePAM no
+PermitRootLogin yes
+PasswordAuthentication yes
+
+
+/usr/sbin/sshd -D -ddd
+
+
+apt update && apt install -y iproute2
+ss -tuln
+
+
+
+ docker exec -it mysql_db mysql -uroot -pAsdf1234! -P3306
+
+import { apiBaseTour, apiBaseHotel, apiBaseCar, frontendBase } from '../config';
+
+grep -rl 'https://app.tourwise.shop' ./frontend | xargs sed -i `s|https://app.tourwise.shop|${frontendBase}|g`
+
+grep -rl 'https://api.tourwise.shop' ./frontend | xargs sed -i 's|https://api.tourwise.shop|`${apiBaseTour}|g'
+
+grep -rl 'https://api2.tourwise.shop' ./frontend | xargs sed -i 's|https://api2.tourwise.shop|`${apiBaseHotel}|g'
+
+grep -rl 'https://api3.tourwise.shop' ./frontend | xargs sed -i 's|https://api3.tourwise.shop|`${apiBaseCar}|g'
+
+
+docker cp mysql_backup_2025-07-16_17-13.sql mysql_db:/alldb.sql
+docker exec -it mysql_db bash
+mysql -u root -pAsdf1234! < /alldb.sql
+mysql -u root -pAsdf1234!
+
+
+
+docker stop vite_frontend
+docker rm vite_frontend
+
+docker-compose build frontend
+
+docker-compose up -d frontend
+
+
+
+
+docker-compose build frontend
+docker-compose up -d frontend
+
+
+
+
+grep -rnw backend/ -e 'def send_confirmation_email'
+
+
+git add .
+
+git commit -m "Fix: resolved circular import, added get_db_connection, updated imports"
+
+git push origin staging
+
+
+# Stage everything (except ignored files)
+git add .
+
+# Commit with a message
+git commit -m "Cleaned up code, updated .gitignore, ready for backup"
+
+# Push to the correct branch (e.g., main or staging)
+git push origin main
+
+
+rclone ls backupdrive:
+rclone ls backupdrive:"SIP"
+rclone lsf backupdrive:"SIP"
+rclone lsf backupdrive:"SIP" --recursive

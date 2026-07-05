@@ -1,3 +1,4 @@
+#frontend/Dockerfile
 # Use Node.js official image
 FROM node:20-slim
 

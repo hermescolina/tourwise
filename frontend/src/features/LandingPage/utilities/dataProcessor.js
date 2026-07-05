@@ -8,7 +8,7 @@
 
 /**
  * Parses raw data from API or localStorage into a standardized, filtered array of tours.
- * * @param {any} rawData - The input data, which may be a string, array, or object wrapper.
+ * @param {any} rawData - The input data, which may be a string, array, or object wrapper.
  * @returns {Array} An array containing only valid tour objects.
  */
 

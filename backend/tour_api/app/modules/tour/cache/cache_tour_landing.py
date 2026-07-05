@@ -466,11 +466,18 @@ def get_tourlandingpages():
 
     # ---- STEP 4: Return the Fresh Payload ----
     # The server_version should already be cached from the ETag check
-    final_version = server_version or get_current_api_version()
-    headers = _default_headers()
-    headers['ETag'] = f'"{final_version}"'
+    # final_version = server_version or get_current_api_version()
+    # headers = _default_headers()
+    # headers['ETag'] = f'"{final_version}"'
     # The payload from Redis/DB might be a string, needs to be returned as a Flask Response
     # return Response(payload, mimetype='application/json', headers=headers)
     # return payload
-    return jsonify(payload), 200, headers
+    # return jsonify(payload), 200, headers
 
+    # ---- STEP 4: Return the Fresh Payload ----
+    final_version = server_version or get_current_api_version()
+    headers = _default_headers()
+    headers['ETag'] = f'"{final_version}"'
+    
+    # ✅ Return the string payload directly as a JSON response
+    return Response(payload, mimetype='application/json', headers=headers), 200

@@ -9,7 +9,7 @@ MYSQL_USER="root"
 MYSQL_PASSWORD="Asdf1234!"  # Replace with correct password
 
 # 📁 Choose the backup file to restore (you can modify this to restore latest)
-SQL_FILE="$BACKUP_DIR/mysql_backup_2025-10-31_08-27.sql"
+SQL_FILE="$BACKUP_DIR/mysql_backup_2026-02-03_04-57.sql"
 VOLUME_ARCHIVE="$BACKUP_DIR/mysql_volume_backup_2025-10-31_08-27.tar.gz"
 
 # 🧠 ASK: Restore SQL or Volulme?

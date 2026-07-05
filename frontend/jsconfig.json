@@ -1,10 +1,14 @@
+// {
+//   "compilerOptions": {
+//     "baseUrl": ".",
+//     "paths": {
+//       "@/*": ["src/*"],
+//       "@LandingPage/*": ["src/features/LandingPage/*"]
+//     }
+//   },
+//   "include": ["src"]
+// }
 {
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"],
-      "@LandingPage/*": ["src/features/LandingPage/*"]
-    }
-  },
+  "compilerOptions": {},
   "include": ["src"]
 }

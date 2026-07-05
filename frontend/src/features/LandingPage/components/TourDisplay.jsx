@@ -1,23 +1,13 @@
 // src/components/TourDisplay.jsx
 import React from 'react';
 import { useTourData } from '@LandingPage/hooks/useTourLandingData'; // Import your hook
-import { apiBaseTour, frontendBase } from '@/config';
 
-import { useNavigate, useLocation, useParams,  useSearchParams} from 'react-router-dom';
+// import { useNavigate, useLocation, useParams,  useSearchParams} from 'react-router-dom';
+import { useNavigate} from 'react-router-dom';
 
-const base = `${frontendBase}/tourism-analytics/`;
-const baseurl = `${apiBaseTour}/uploads`;
-const isValidUrl = (str) => str.startsWith('http://') || str.startsWith('https://');
+import { getStaticImageUrl } from '@Common/utilities/getStaticImageUrl';
 
-const getStaticImageUrl = (path) => {
-    if (!path) return '';
-    if (isValidUrl(path)) return path;
-    const cleaned = path.startsWith('/') ? path : `/${path}`;
-    return cleaned.startsWith('/images/')
-        ? `${base}${cleaned}`
-        : `${baseurl}${cleaned}`;
-};
-
+const imgSrc = getStaticImageUrl; 
 
 function TourDisplay({ styles }) {
     const navigate = useNavigate();
@@ -41,15 +31,16 @@ function TourDisplay({ styles }) {
         <div className={styles.tourCards}>
             
             {items && items.map((it, idx) => {
+                console.count("check tourDisplay item cout:");
                 const tour = it.tour || {};
                 const key = tour.item_id ?? tour.id ?? tour.slug ?? idx;
                 // safe price formatting
                 let price = '';
                 try {
-                const raw = (tour.price ?? '').toString().replace(/,/g, '').trim();
-                price = raw ? Number(raw).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '';
+                    const raw = (tour.price ?? '').toString().replace(/,/g, '').trim();
+                    price = raw ? Number(raw).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '';
                 } catch (e) {
-                price = tour.price ?? '';
+                    price = tour.price ?? '';
                 }
 
                 return (
@@ -60,7 +51,7 @@ function TourDisplay({ styles }) {
                 >
                     {tour.image && (
                     <img
-                        src={getStaticImageUrl(tour.image)}
+                        src={imgSrc(tour.image)}
                         alt={tour.title ?? 'No title'}
                         className={styles.tourImage}
                     />

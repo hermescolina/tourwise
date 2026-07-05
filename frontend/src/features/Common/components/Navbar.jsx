@@ -46,7 +46,7 @@ const Navbar = ({ rightSlot: RightComponent = null }) => {
     return (
         <header className={styles.navbar}> 
             <div className={styles.navbarContainer}>
-                
+                {console.log("check")}
                 {/* 1. Logo: Ensure the root link uses the basename */}
                 <a href={APP_BASENAME + '/'} className={styles.navbarLogo}>TourWise 🌍</a>
 

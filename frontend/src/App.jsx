@@ -9,8 +9,10 @@ import TourCards from '@TourCardsPage/pages/TourCards.jsx';
 import TourPage from '@TourPage/pages/TourPage.jsx';
 import LoginPage from '@LoginPage/LoginPage.jsx';
 
+
 function App() {
   return (
+    <>
       <Routes>
         <Route 
           path="/" 
@@ -25,6 +27,7 @@ function App() {
         />
         <Route path="/login" element={<LoginPage />} />
       </Routes>
+    </>
   );
 }
 

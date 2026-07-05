@@ -1,0 +1,84 @@
+/* Base container for the content area */
+.content {
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    font-family: Arial, sans-serif;
+}
+
+/* Heading and Paragraph Styling */
+.content h1 {
+    color: #333;
+    margin-bottom: 1rem;
+}
+
+.content p {
+    color: #555;
+    line-height: 1.6;
+}
+
+/* --- Status and Tab Sections --- */
+
+/* Container for the test tabs */
+.tabContainer {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    border-bottom: 2px solid #ddd;
+    padding-bottom: 5px;
+}
+
+/* Base style for all tab buttons */
+.tabButton, .activeTab {
+    background: none;
+    border: none;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: color 0.2s, border-bottom 0.2s;
+    color: #666;
+    margin-bottom: -2px; /* Pulls button slightly down to cover border */
+}
+
+/* Styling for the currently active tab */
+.activeTab {
+    color: #0d47a1; /* Matches your Navbar's Deep Blue */
+    font-weight: bold;
+    border-bottom: 4px solid #0d47a1;
+}
+
+.tabButton:hover {
+    color: #0d47a1;
+}
+
+/* Box to display status messages */
+.statusBox {
+    background-color: #f8f9fa; /* Light background */
+    border: 1px solid #e9ecef;
+    padding: 1.5rem;
+    margin-top: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.statusBox h2 {
+    color: #0d47a1;
+    margin-bottom: 0.8rem;
+    font-size: 1.25rem;
+}
+
+.statusBox ul {
+    list-style: disc;
+    margin-left: 1.5rem;
+    padding-left: 0;
+}
+
+.statusBox li {
+    margin-bottom: 0.4rem;
+    color: #495057;
+}
+
+/* Checklist specific styling */
+.statusBox li::marker {
+    color: #28a745; /* Green checkmark color */
+}

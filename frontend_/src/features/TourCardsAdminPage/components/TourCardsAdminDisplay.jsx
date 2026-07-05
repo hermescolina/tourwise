@@ -1,8 +1,8 @@
 import { useSearchParams } from 'react-router-dom';
-import { apiBaseTour, frontendBase } from '../config';
+import { apiBaseTour, frontendBase } from '@/config';
 import { useEffect, useState } from 'react';
 import './TourCardsAdmin.css'; 
-import RoomTypeSelector from "./RoomTypeSelector";
+import RoomTypeSelector from "../../Common/components/RoomTypeSelector";
 
 // ---------- Caching helpers (additions; nothing removed below) ----------
 // ---------- Caching helpers (additions; nothing removed below) ----------
